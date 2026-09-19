@@ -605,6 +605,43 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // Objective-C metadata, then arity inference.
     const std::string name = header_display_name(
         e, working, binary, annotations);
+    if (options.c_source) {
+        for (const auto& block : working.ir->blocks) {
+            for (const auto& inst : block.insts) {
+                if (inst.op != IrOp::Phi || type_bits(inst.dst.type) <= 64 ||
+                    !e.c_type_name_for(inst.dst).starts_with("__m")) continue;
+                const auto key = ssa_key(inst.dst);
+                if (!key) continue;
+                // Acyclic vector selections can render as conditional
+                // expressions. Loop-carried vectors need explicit copies.
+                std::vector<addr_t> pending = block.successors;
+                std::set<addr_t> seen;
+                bool cyclic = false;
+                while (!pending.empty()) {
+                    const addr_t address = pending.back();
+                    pending.pop_back();
+                    if (address == block.start) { cyclic = true; break; }
+                    if (!seen.insert(address).second) continue;
+                    const auto found = working.ir->block_at.find(address);
+                    if (found == working.ir->block_at.end()) continue;
+                    const auto& successors = working.ir->blocks[found->second].successors;
+                    pending.insert(pending.end(), successors.begin(), successors.end());
+                }
+                if (!cyclic) continue;
+                const bool consumed = e.structured_return_values.contains(*key) ||
+                    std::ranges::any_of(e.ssa_uses.visible_user_positions(*key),
+                        [&](const auto& user) {
+                            const auto op = working.ir->blocks[user.first].insts[user.second].op;
+                            return op != IrOp::Return && op != IrOp::Phi;
+                        });
+                if (consumed) {
+                    return std::unexpected(Error::not_implemented(std::format(
+                        "C export for {} is incomplete: unsupported vector merge; "
+                        "use -p to inspect the partial result", name)));
+                }
+            }
+        }
+    }
     const std::string header = select_function_header(
         e, working, sig_ctx, annotations, name);
     out += rtti_alias_comment(e, start);

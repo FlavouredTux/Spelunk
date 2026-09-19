@@ -413,12 +413,17 @@ std::string Emitter::render_cmp(std::string_view op, const IrValue& a,
     // applying them to FPR operands destroys the source semantics.
     const bool signed_integer_cmp =
         signed_cmp && !is_float_type(a.type) && !is_float_type(b.type);
-    const bool cast_l = signed_integer_cmp && a.kind != IrValueKind::Imm;
-    const bool cast_r = signed_integer_cmp && b.kind != IrValueKind::Imm;
+    const auto narrow_unsigned = [&](IrType type) {
+        return !signed_cmp && !is_float_type(type) &&
+            type_bits(type) > 1 && type_bits(type) < 32;
+    };
+    const bool cast_l = (signed_integer_cmp || narrow_unsigned(a.type)) && a.kind != IrValueKind::Imm;
+    const bool cast_r = (signed_integer_cmp || narrow_unsigned(b.type)) && b.kind != IrValueKind::Imm;
     // Interpret the operand at its machine width before C promotes it.
     // Widening uint32_t directly to int64_t loses the sign of a CMP r32.
-    const auto signed_type = [](IrType type) {
-        return std::format("int{}_t", std::max(8u, type_bits(type)));
+    const auto comparison_type = [&](IrType type) {
+        return std::format("{}int{}_t", signed_integer_cmp ? "" : "u",
+                           std::max(8u, type_bits(type)));
     };
     // If we're going to cast, the inner must bind at Unary;
     // otherwise the compare's own precedence is enough.
@@ -432,6 +437,10 @@ std::string Emitter::render_cmp(std::string_view op, const IrValue& a,
                 const u64 sign = u64{1} << (bits - 1);
                 const u64 value = static_cast<u64>(v.imm) & ((u64{1} << bits) - 1);
                 literal.imm = static_cast<i64>((value ^ sign) - sign);
+            } else if (!signed_integer_cmp && !is_float_type(v.type) && bits > 0 && bits < 32) {
+                literal.imm = static_cast<i64>(static_cast<u64>(v.imm) & ((u64{1} << bits) - 1));
+                // Keep numeric formatting from turning 0xff back into -1.
+                literal.type = IrType::I64;
             }
             return format_numeric_imm(literal);
         }
@@ -449,8 +458,8 @@ std::string Emitter::render_cmp(std::string_view op, const IrValue& a,
         left = std::format("({})(uintptr_t)({})", c_type_name(a.type), left);
         right = std::format("({})(uintptr_t)({})", c_type_name(b.type), right);
     }
-    if (cast_l) left  = std::format("({}){}", signed_type(a.type), left);
-    if (cast_r) right = std::format("({}){}", signed_type(b.type), right);
+    if (cast_l) left  = std::format("({}){}", comparison_type(a.type), left);
+    if (cast_r) right = std::format("({}){}", comparison_type(b.type), right);
     return wrap_if_lt(std::format("{} {} {}", left, op, right), own, min_prec);
 }
 

@@ -579,13 +579,13 @@ void Emitter::emit_region_for(const Region& r, int depth, std::string& out) cons
     const std::string update = r.has_update
         ? render_update_inst(r.update_block, r.update_inst)
         : std::string{};
+    if (update.empty()) {
+        emit_region_while(r, depth, out);
+        return;
+    }
     const std::string cond = render_condition(r.condition, r.invert);
     emit_materializations_for_rendered_value(r.condition, cond, out, ind);
-    if (update.empty()) {
-        out += std::format("{}while ({}) {{\n", ind, cond);
-    } else {
-        out += std::format("{}for (; {}; {}) {{\n", ind, cond, update);
-    }
+    out += std::format("{}for (; {}; {}) {{\n", ind, cond, update);
     for (const auto& c : r.children) emit_region(*c, depth + 1, out);
     out += std::format("{}}}\n", ind);
 }

@@ -14,6 +14,8 @@ SAMPLES = {
     'loops': ('accumulate', 'uint32_t|uint32_t|limit|uint32_t|seed'),
     'records': ('update_counter', 'uint32_t|void*|counter|uint32_t|amount'),
     'division': ('divide_pair', 'int32_t|int32_t|numerator|int32_t|denominator'),
+    'arrays': ('transform_bytes', 'uint32_t|uint8_t*|data|uint32_t|count'),
+    'overlap': ('shift_bytes', 'uint32_t|uint8_t*|data|uint32_t|count'),
 }
 
 
@@ -26,6 +28,25 @@ def compare(sample, name, native, exported, seed, random_cases):
     libraries = [ctypes.CDLL(str(path)) for path in (native, exported)]
     functions = [getattr(lib, name) for lib in libraries]
     rng = random.Random(seed)
+    if sample in ('arrays', 'overlap'):
+        for fn in functions:
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            fn.restype = ctypes.c_uint32
+        payloads = [bytes(32), bytes([255] * 32), bytes(range(32)),
+                    bytes(range(32, 0, -1)), bytes([0, 7, 255, 9] * 8)]
+        cases = [(data, length) for data in payloads
+                 for length in (0, 1, 2, 3, 7, 8, 15, 16, 31, 32)]
+        cases += [(rng.randbytes(32), rng.randrange(33)) for _ in range(random_cases)]
+        for data, length in cases:
+            results = []
+            for fn in functions:
+                storage = (ctypes.c_ubyte * 48).from_buffer_copy(
+                    bytes([0xa5] * 8) + data + bytes([0x5a] * 8))
+                result = fn(ctypes.byref(storage, 8), length)
+                results.append((result, bytes(storage)))
+            if results[0] != results[1]:
+                raise AssertionError(f'{name}({data.hex()}, {length}): {results!r}')
+        return len(cases)
     if sample == 'records':
         for fn in functions:
             fn.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
@@ -78,6 +99,7 @@ def main():
     root = Path(__file__).resolve().parents[1]
     parser.add_argument('--spelunk', type=Path, default=root / 'build/cli/spelunk')
     parser.add_argument('--cc', default='cc')
+    parser.add_argument('--samples', nargs='+', choices=tuple(SAMPLES), default=tuple(SAMPLES))
     parser.add_argument('--optimizations', nargs='+', choices=('0', '1', '2', '3', 's'),
                         default=('0', '2'))
     parser.add_argument('--seed', type=int, default=20260919)
@@ -94,10 +116,13 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     report = []
-    for sample, (name, signature) in SAMPLES.items():
+    for sample in args.samples:
+        name, signature = SAMPLES[sample]
         for optimization in args.optimizations:
             folder = output / f'{sample}-O{optimization}'
             folder.mkdir(exist_ok=True)
+            for artifact in ('pseudo.c', 'exported.c', 'exported-O0.so', 'exported-O2.so'):
+                (folder / artifact).unlink(missing_ok=True)
             native = folder / 'native.so'
             run([args.cc, '-std=c11', '-g', '-O' + optimization, '-shared', '-fPIC',
                  root / 'tests/support/pseudocode_samples' / (sample + '.c'), '-o', native])
@@ -125,12 +150,22 @@ def main():
                 row['status'] = 'passed'
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, AssertionError) as error:
                 row['status'] = 'failed'
-                row['error'] = str(error) + '\n' + (getattr(error, 'stderr', '') or '')
+                diagnostics = getattr(error, 'stderr', '') or ''
+                if isinstance(diagnostics, bytes):
+                    diagnostics = diagnostics.decode(errors='replace')
+                row['error'] = str(error) + '\n' + diagnostics
+                # SIMD loop-carried values cannot yet be exported. Require an
+                # explicit refusal with no partial C instead of compiling it.
+                if (sample == 'overlap' and isinstance(error, subprocess.CalledProcessError)
+                        and '--emit-c' in error.cmd and error.returncode == 1
+                        and not error.stdout
+                        and 'is incomplete: unsupported vector merge;' in (error.stderr or '')):
+                    row['status'] = 'unsupported'
             report.append(row)
             (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
             print(f'{sample}-O{optimization}: {row["status"]}', flush=True)
     print(f'Binaries, pseudo-C, exports and results: {output}')
-    return int(any(row['status'] != 'passed' for row in report))
+    return int(any(row['status'] == 'failed' for row in report))
 
 
 if __name__ == '__main__':

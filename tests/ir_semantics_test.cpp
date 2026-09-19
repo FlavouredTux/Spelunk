@@ -203,6 +203,22 @@ bool cast_cases() {
 bool partial_register_cases() {
     for (IrType narrow : {IrType::I1, IrType::I8, IrType::I16, IrType::I32}) {
         const u64 low_mask = (u64{1} << type_bits(narrow)) - 1;
+        {
+            Program p("dynamic-partial-register-xor");
+            const auto old = IrValue::make_reg(Reg::Rdi, IrType::I64);
+            const auto data = IrValue::make_reg(Reg::Rsi, IrType::I64);
+            const auto high = p.value(IrOp::And, IrType::I64, {old, imm(~low_mask, IrType::I64)});
+            const auto low = p.value(IrOp::Trunc, narrow, {data});
+            const auto wide = p.value(IrOp::ZExt, IrType::I64, {low});
+            const auto merged = p.value(IrOp::Or, IrType::I64, {high, wide});
+            const auto mixed = p.value(IrOp::Xor, IrType::I64, {merged, old});
+            p.ret(p.value(IrOp::Trunc, narrow, {mixed}));
+            std::vector<MachineInput> inputs;
+            for (u64 a : {u64{0}, u64{1}, low_mask, ~u64{0}, u64{0x123456789abcdef0}})
+                for (u64 b : {u64{0}, u64{1}, low_mask, ~u64{0}})
+                    inputs.push_back(input_for(1, a, b));
+            if (!verifier.verify(p.fn, inputs)) return false;
+        }
         for (u64 retained : {u64{0}, u64{1}}) {
             for (bool reverse : {false, true}) {
                 for (u64 literal : {u64{0}, u64{100}, low_mask, ~u64{0}}) {

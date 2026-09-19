@@ -21,6 +21,53 @@ std::size_t pass_cast_simplify(
     std::span<const u32> dirty, std::vector<u32>& touched) {
     const auto& defs = am.defs(fn);
 
+    // XOR's low bits depend only on the operands' low bits. Expose the
+    // narrower inputs so partial-register masks can discard stale carriers.
+    std::size_t narrowed = 0;
+    std::vector<std::pair<u32, std::vector<IrInst>>> replacements;
+    for_blocks(fn, dirty, [&](u32 bi, IrBlock& bb) {
+        std::vector<IrInst> instructions;
+        bool changed = false;
+        for (const auto& original : bb.insts) {
+            IrInst inst = original;
+            if (inst.op == IrOp::Trunc && inst.src_count == 1 &&
+                type_bits(inst.dst.type) < type_bits(inst.srcs[0].type)) {
+                const auto key = ssa_key(inst.srcs[0]);
+                const auto found = key ? defs.find(*key) : defs.end();
+                if (found != defs.end()) {
+                    const auto& producer = fn.blocks[found->second.block].insts[found->second.inst];
+                    if (producer.op == IrOp::Xor && producer.src_count == 2) {
+                        for (u8 i = 0; i < 2; ++i) {
+                            IrInst cast;
+                            cast.op = IrOp::Trunc;
+                            cast.dst = IrValue::make_temp(fn.next_temp_id++, inst.dst.type);
+                            cast.srcs[0] = producer.srcs[i];
+                            cast.src_count = 1;
+                            cast.source_addr = inst.source_addr;
+                            inst.srcs[i] = cast.dst;
+                            instructions.push_back(std::move(cast));
+                        }
+                        inst.op = IrOp::Xor;
+                        inst.src_count = 2;
+                        changed = true;
+                        ++narrowed;
+                    }
+                }
+            }
+            instructions.push_back(std::move(inst));
+        }
+        if (changed) {
+            replacements.emplace_back(bi, std::move(instructions));
+            touched.push_back(bi);
+        }
+    });
+    if (narrowed) {
+        for (auto& [bi, instructions] : replacements)
+            fn.blocks[bi].insts = std::move(instructions);
+        am.invalidate_defs();
+        return narrowed;
+    }
+
     auto is_cast = [](IrOp op) noexcept {
         return op == IrOp::Trunc || op == IrOp::ZExt || op == IrOp::SExt;
     };
@@ -46,13 +93,11 @@ std::size_t pass_cast_simplify(
             auto it = defs.find(*k);
             if (it == defs.end()) continue;
             const IrInst* def = &fn.blocks[it->second.block].insts[it->second.inst];
-            // A partial-register write replaces the low bits with a literal.
-            // Narrowing it must not retain the old high-register dependency.
+            // Narrowing a partial-register write discards its masked high bits.
             if (inst.op == IrOp::Trunc && type_bits(dt) <= 64 &&
                 def->op == IrOp::Or && def->src_count == 2) {
-                for (u8 literal = 0; literal < 2; ++literal) {
-                    if (def->srcs[literal].kind != IrValueKind::Imm) continue;
-                    const auto other = ssa_key(def->srcs[1 - literal]);
+                for (u8 low = 0; low < 2; ++low) {
+                    const auto other = ssa_key(def->srcs[1 - low]);
                     if (!other) continue;
                     const auto masked = defs.find(*other);
                     if (masked == defs.end()) continue;
@@ -63,8 +108,13 @@ std::size_t pass_cast_simplify(
                         clears_low |= mask_inst.srcs[i].kind == IrValueKind::Imm &&
                             mask_unsigned(mask_inst.srcs[i].imm, dt) == 0;
                     if (!clears_low) continue;
-                    inst.op = IrOp::Assign;
-                    inst.srcs[0] = IrValue::make_imm(mask_signed(def->srcs[literal].imm, dt), dt);
+                    inst.srcs[0] = def->srcs[low];
+                    if (inst.srcs[0].kind == IrValueKind::Imm) {
+                        inst.srcs[0] = IrValue::make_imm(mask_signed(inst.srcs[0].imm, dt), dt);
+                        inst.op = IrOp::Assign;
+                    } else if (inst.srcs[0].type == dt) {
+                        inst.op = IrOp::Assign;
+                    }
                     ++changes;
                     break;
                 }

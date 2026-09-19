@@ -6,6 +6,8 @@ Small C inputs for inspecting decompiler output and checking its behavior:
 - `loops.c`: nested loops, `continue`, early exits, and unsigned arithmetic.
 - `records.c`: struct fields, conditional stores, null pointers, and counters.
 - `division.c`: signed quotient and remainder, including negative divisors.
+- `arrays.c`: byte traversal, sentinel exits, skipped elements, and in-place updates.
+- `overlap.c`: backward copying within one buffer and a running checksum.
 
 From the repository root:
 
@@ -26,6 +28,8 @@ python3 scripts/pseudocode_samples.py --cc clang --optimizations 0 1 2 3 s \
   --seed 42 --random-cases 1000 --output build/pseudo-clang-42
 ```
 
+Use `--samples arrays overlap` to select individual inputs.
+
 Each execution comparison runs in a separate process with a 30-second timeout.
 A crash or hang is recorded as a failure, and the remaining samples still run.
 
@@ -44,3 +48,8 @@ CTest runs this as `pseudocode_samples_semantics` on Linux x86-64 at `-O0`,
 fail on a mismatch, crash, timeout, or failed export. The samples cover signed
 division, signed-byte returns, switch declarations, partial-register writes,
 and assignments on conditional paths into shared return blocks.
+
+Loop-carried vector merges remain unsupported by the C exporter. Clang currently vectorizes
+`overlap.c` at `-O2` and `-O3`; those variants must return the explicit
+`unsupported vector merge` error without emitting partial C. The report labels
+them `unsupported`, not `passed`. All other failures fail the test.

@@ -180,11 +180,13 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
         t = insn.x86_vector_bits == 3 ? IrType::I512
             : (insn.x86_vector_bits == 2 ? IrType::I256 : IrType::I128);
     }
-    const bool nondestructive = (insn.x86_vex || insn.x86_evex) &&
+    const bool unary_shuffle = insn.mnemonic == Mnemonic::Pshufd ||
+        insn.mnemonic == Mnemonic::Pshuflw || insn.mnemonic == Mnemonic::Pshufhw;
+    const bool nondestructive = !unary_shuffle && (insn.x86_vex || insn.x86_evex) &&
                                 insn.num_operands >= 3;
-    IrValue a = read_xmm(ctx, insn.operands[nondestructive ? 1 : 0], t);
-    IrValue b = read_xmm(ctx, insn.operands[nondestructive ? 2 : 1], t);
-    if (a.kind == IrValueKind::None || b.kind == IrValueKind::None) return;
+    IrValue a = read_xmm(ctx, insn.operands[unary_shuffle || nondestructive ? 1 : 0], t);
+    IrValue b = unary_shuffle ? IrValue{} : read_xmm(ctx, insn.operands[nondestructive ? 2 : 1], t);
+    if (a.kind == IrValueKind::None || (!unary_shuffle && b.kind == IrValueKind::None)) return;
 
     IrInst i;
     i.op   = IrOp::Intrinsic;
@@ -200,16 +202,14 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
     }
     i.dst  = ctx.temp(t);
     i.srcs[0]   = a;
-    i.srcs[1]   = b;
-    i.src_count = 2;
-    // Three-operand forms (Pshufd's immediate selector) tag the imm onto
-    // src[2] so the intrinsic shows the shuffle pattern in its argument list.
+    i.src_count = 1;
+    if (!unary_shuffle) i.srcs[i.src_count++] = b;
+    // Shuffle controls are unsigned encoding bytes, not signed constants.
     const std::size_t immediate_index = nondestructive ? 3u : 2u;
     if (insn.num_operands > immediate_index &&
         insn.operands[immediate_index].kind == Operand::Kind::Immediate) {
         const Imm& im = insn.operands[immediate_index].imm;
-        i.srcs[i.src_count++] = ctx.imm(
-            im.value, type_for_bits(im.size * 8));
+        i.srcs[i.src_count++] = ctx.imm(static_cast<u8>(im.value), IrType::I32);
     }
     if (insn.x86_evex && insn.x86_mask != 0 &&
         i.src_count < i.srcs.size()) {

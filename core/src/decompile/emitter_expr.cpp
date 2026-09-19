@@ -114,6 +114,21 @@ std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
         }
     }
     const std::string refined = c_type_name_for(d.dst);
+    if (options.c_source && binary && d.segment == Reg::None &&
+        (abi == Abi::SysVAmd64 || abi == Abi::Win64) &&
+        d.dst.type == IrType::I128 && binary->endian() == Endian::Little) {
+        if (auto address = try_resolve_imm_addr(d.srcs[0])) {
+            const auto va = static_cast<addr_t>(*address);
+            for (const auto& section : binary->sections()) {
+                if (!section.flags.readable || section.flags.writable || section.flags.executable || va < section.vaddr ||
+                    va - section.vaddr > section.size || 16 > section.size - (va - section.vaddr)) continue;
+                const auto bytes = binary->bytes_at(va);
+                if (bytes.size() < 16) break;
+                return std::format("_mm_set_epi64x((int64_t)UINT64_C({:#x}), (int64_t)UINT64_C({:#x}))",
+                    read_le_at<u64>(bytes.data() + 8), read_le_at<u64>(bytes.data()));
+            }
+        }
+    }
     if (options.c_source && d.segment == Reg::None && !stack_offset(d.srcs[0])) {
         std::string loaded = std::format("spelunk_read_{}({})", c_memory_suffix(d.dst.type), c_address(d.srcs[0]));
         if (refined.ends_with('*')) loaded = std::format("({})(uintptr_t){}", refined, loaded);

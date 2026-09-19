@@ -49,7 +49,7 @@ fail on a mismatch, crash, timeout, or failed export. The samples cover signed
 division, signed-byte returns, switch declarations, partial-register writes,
 and assignments on conditional paths into shared return blocks.
 
-Loop-carried vector merges remain unsupported by the C exporter. Clang currently vectorizes
-`overlap.c` at `-O2` and `-O3`; those variants must return the explicit
-`unsupported vector merge` error without emitting partial C. The report labels
-them `unsupported`, not `passed`. All other failures fail the test.
+Clang's `-O2` and `-O3` overlap variants exercise SSE2 vector loops and their
+scalar tails. Buffers up to 128 bytes cover several vector iterations and
+lengths around vector boundaries. These variants must pass the same execution
+and full-buffer comparisons as the scalar builds.

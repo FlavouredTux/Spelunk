@@ -634,7 +634,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
                             const auto op = working.ir->blocks[user.first].insts[user.second].op;
                             return op != IrOp::Return && op != IrOp::Phi;
                         });
-                if (consumed) {
+                if (consumed && !e.scoped_ssa_name(inst.dst)) {
                     return std::unexpected(Error::not_implemented(std::format(
                         "C export for {} is incomplete: unsupported vector merge; "
                         "use -p to inspect the partial result", name)));

@@ -32,15 +32,15 @@ def compare(sample, name, native, exported, seed, random_cases):
         for fn in functions:
             fn.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
             fn.restype = ctypes.c_uint32
-        payloads = [bytes(32), bytes([255] * 32), bytes(range(32)),
-                    bytes(range(32, 0, -1)), bytes([0, 7, 255, 9] * 8)]
+        payloads = [bytes(128), bytes([255] * 128), bytes(range(128)),
+                    bytes(range(128, 0, -1)), bytes([0, 7, 255, 9] * 32)]
         cases = [(data, length) for data in payloads
-                 for length in (0, 1, 2, 3, 7, 8, 15, 16, 31, 32)]
-        cases += [(rng.randbytes(32), rng.randrange(33)) for _ in range(random_cases)]
+                 for length in (0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128)]
+        cases += [(rng.randbytes(128), rng.randrange(129)) for _ in range(random_cases)]
         for data, length in cases:
             results = []
             for fn in functions:
-                storage = (ctypes.c_ubyte * 48).from_buffer_copy(
+                storage = (ctypes.c_ubyte * (len(data) + 16)).from_buffer_copy(
                     bytes([0xa5] * 8) + data + bytes([0x5a] * 8))
                 result = fn(ctypes.byref(storage, 8), length)
                 results.append((result, bytes(storage)))
@@ -154,18 +154,11 @@ def main():
                 if isinstance(diagnostics, bytes):
                     diagnostics = diagnostics.decode(errors='replace')
                 row['error'] = str(error) + '\n' + diagnostics
-                # SIMD loop-carried values cannot yet be exported. Require an
-                # explicit refusal with no partial C instead of compiling it.
-                if (sample == 'overlap' and isinstance(error, subprocess.CalledProcessError)
-                        and '--emit-c' in error.cmd and error.returncode == 1
-                        and not error.stdout
-                        and 'is incomplete: unsupported vector merge;' in (error.stderr or '')):
-                    row['status'] = 'unsupported'
             report.append(row)
             (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
             print(f'{sample}-O{optimization}: {row["status"]}', flush=True)
     print(f'Binaries, pseudo-C, exports and results: {output}')
-    return int(any(row['status'] == 'failed' for row in report))
+    return int(any(row['status'] != 'passed' for row in report))
 
 
 if __name__ == '__main__':

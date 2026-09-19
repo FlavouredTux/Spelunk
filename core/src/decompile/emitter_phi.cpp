@@ -1,4 +1,4 @@
-// Explicit SSA destruction for scalar integer loops. Copies belong to edges,
+// Explicit SSA destruction for integer and SSE2 vector loops. Copies belong to edges,
 // and every right-hand side is evaluated before any phi destination changes.
 #include "emitter_internal.hpp"
 #include "emitter_text.hpp"
@@ -199,7 +199,7 @@ void Emitter::prepare_phi_copies() {
     const bool with_calls = !call_arities.empty();
     std::set<SsaKey> live;
     std::vector<IrValue> call_arguments;
-    if (with_calls) {
+    {
         live = structured_return_values;
         const auto root = [&](const IrValue& value) { if (auto key = ssa_key(value)) live.insert(*key); };
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
@@ -229,8 +229,8 @@ void Emitter::prepare_phi_copies() {
             const auto key = pending.back(); pending.pop_back();
             const auto* definition = ssa_uses.definition(key);
             if (!definition) continue;
-            if (is_float_type(definition->dst.type) || type_bits(definition->dst.type) > 64) return;
-            if (definition->op == IrOp::Clobber) {
+            if (with_calls && (is_float_type(definition->dst.type) || type_bits(definition->dst.type) > 64)) return;
+            if (with_calls && definition->op == IrOp::Clobber) {
                 const auto position = call_position_for_return_key(key);
                 if (!position || definition->dst.kind != IrValueKind::Reg ||
                     canonical_reg(definition->dst.reg) != int_return_reg(abi) ||
@@ -251,7 +251,9 @@ void Emitter::prepare_phi_copies() {
         for (const auto& inst : block.insts) {
             if (inst.op == IrOp::BranchIndirect) return;
             if (inst.op == IrOp::Phi &&
-                (is_float_type(inst.dst.type) || type_bits(inst.dst.type) > 64) &&
+                (is_float_type(inst.dst.type) ||
+                 (type_bits(inst.dst.type) > 64 &&
+                  (inst.dst.type != IrType::I128 || is_ppc_abi() || with_calls))) &&
                 (!with_calls || (ssa_key(inst.dst) && live.contains(*ssa_key(inst.dst))))) return;
         }
     }
@@ -266,7 +268,8 @@ void Emitter::prepare_phi_copies() {
     std::set<std::string> used_names(self_arg_names.begin(), self_arg_names.end());
     const auto remember = [&](const IrValue& value, std::string_view prefix) {
         auto key = ssa_key(value);
-        if (!key || scoped_ssa_values.contains(*key) || (with_calls && !live.contains(*key))) return;
+        if (!key || scoped_ssa_values.contains(*key) ||
+            ((with_calls || type_bits(value.type) > 64) && !live.contains(*key))) return;
         // Frame addresses already render as named local storage. Hoisting
         // their register definitions would expose the hidden RSP prologue.
         if (stack_offset(value)) return;

@@ -1591,6 +1591,10 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/cmpss_export_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
             set_tests_properties(cmpss_export_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME simd_shuffle_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/simd_shuffle_test.py"
+                    "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")
+            set_tests_properties(simd_shuffle_semantics PROPERTIES TIMEOUT 120)
             add_test(NAME x64_fp_edge_semantics
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/x64_fp_edge_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")

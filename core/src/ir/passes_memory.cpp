@@ -202,6 +202,12 @@ std::size_t pass_dead_store_elim(
         const auto& defs = am.defs(fn);
         for (std::size_t i = 0; i < bb.insts.size(); ++i) {
             auto& inst = bb.insts[i];
+            if ((inst.op == IrOp::Load || inst.op == IrOp::Store) && inst.segment != Reg::None) {
+                // FS/GS add an unknown segment base: the same offset is not
+                // the same stack location, and may alias unrelated memory.
+                last_stores.clear();
+                continue;
+            }
             switch (inst.op) {
                 case IrOp::Store: {
                     if (inst.src_count < 2) break;
@@ -279,6 +285,10 @@ std::size_t pass_memory_forward(
         std::vector<StoredValue> stored;
         const auto& defs = am.defs(fn);
         for (auto& inst : bb.insts) {
+            if ((inst.op == IrOp::Load || inst.op == IrOp::Store) && inst.segment != Reg::None) {
+                stored.clear();
+                continue;
+            }
             switch (inst.op) {
                 case IrOp::Store: {
                     if (inst.src_count < 2) break;

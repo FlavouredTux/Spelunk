@@ -12,6 +12,84 @@
 namespace spelunk::emit {
 
 std::optional<Emitter::RenderedCall>
+Emitter::render_x64_virtual_call(const IrInst& call, const CallArgPack& pack) const {
+    if (options.c_source || !binary || !fn || call.src_count == 0 || pack.ints.size() < 2 ||
+        (abi != Abi::SysVAmd64 && abi != Abi::Win64) || call_annotation_signature(call) ||
+        call_signature_target(call)) return std::nullopt;
+    const auto dispatch = try_render_vfn_dispatch(call.srcs[0]);
+    if (!dispatch) return std::nullopt;
+    const auto* target = def_stripped(call.srcs[0]);
+    if (!target || target->op != IrOp::Load || !target->src_count) return std::nullopt;
+    const auto slot = try_base_plus_offset(target->srcs[0]);
+    const auto* table = slot ? def_stripped(slot->first) : nullptr;
+    if (!table || table->op != IrOp::Load || !table->src_count) return std::nullopt;
+    const auto receiver = canonical_struct_access(table->srcs[0]);
+    const auto first = canonical_struct_access(pack.ints[0]);
+    if (!receiver || !first || receiver->second != first->second ||
+        !same_value_key(receiver->first, first->first)) return std::nullopt;
+
+    // Cleanup folds register copies, so equal SSA values alone cannot prove
+    // a duplicate is stale. Re-lift the call's predecessor slice and preserve
+    // every explicitly written ABI lane, including preparation across a jump.
+    const IrBlock* site = nullptr;
+    for (const auto& block : fn->blocks)
+        if (block.start <= call.source_addr && call.source_addr < block.end) site = &block;
+    if (!site) return std::nullopt;
+    auto decoder = make_decoder(*binary);
+    auto lifter = make_lifter(*binary);
+    if (!decoder || !lifter) return std::nullopt;
+    std::vector<addr_t> pending{site->start};
+    std::set<addr_t> visited;
+    std::set<Reg> writes;
+    std::size_t budget = 512;
+    while (!pending.empty()) {
+        const auto address = pending.back(); pending.pop_back();
+        if (!visited.insert(address).second) continue;
+        const auto found = fn->block_at.find(address);
+        if (found == fn->block_at.end()) return std::nullopt;
+        const auto& block = fn->blocks[found->second];
+        BasicBlock window;
+        window.start = block.start;
+        window.end = address == site->start ? call.source_addr : block.end;
+        for (addr_t pc = window.start; pc < window.end;) {
+            if (!budget) return std::nullopt;
+            --budget;
+            const auto instruction = (*decoder)->decode(binary->bytes_at(pc), pc);
+            if (!instruction || !instruction->length || instruction->length > window.end - pc)
+                return std::nullopt;
+            window.instructions.push_back(*instruction);
+            pc += instruction->length;
+        }
+        Function preparation;
+        preparation.start = window.start; preparation.end = window.end;
+        preparation.block_at[window.start] = 0;
+        preparation.blocks.push_back(std::move(window));
+        auto lifted = (*lifter)->lift(preparation);
+        if (!lifted) return std::nullopt;
+        for (const auto& bb : lifted->blocks) for (const auto& inst : bb.insts)
+            if (inst.dst.kind == IrValueKind::Reg && inst.op != IrOp::Clobber)
+                writes.insert(canonical_reg(inst.dst.reg));
+        pending.insert(pending.end(), block.predecessors.begin(), block.predecessors.end());
+    }
+    const auto registers = int_arg_regs(abi);
+    auto candidates = pack.ints;
+    while (!candidates.empty() && is_stale_arg_reg(candidates.back())) candidates.pop_back();
+    bool trimmed = false;
+    while (candidates.size() > 1 && candidates.size() <= registers.size()) {
+        const auto i = candidates.size() - 1;
+        if (writes.contains(canonical_reg(registers[i])) ||
+            !same_value_key(candidates[i], candidates[0])) break;
+        candidates.pop_back();
+        trimmed = true;
+    }
+    if (!trimmed) return std::nullopt;
+    RenderedCall result;
+    const auto arguments = format_call_args_fallback(candidates, &result.used_args);
+    result.expr = std::format("{}({}) /* inferred ABI args */", *dispatch, arguments);
+    return result;
+}
+
+std::optional<Emitter::RenderedCall>
 Emitter::render_ppc_virtual_call(const IrInst& call, const CallArgPack& pack) const {
     if (!is_ppc_abi() || !fn || call.src_count == 0 || pack.ints.empty()) return std::nullopt;
     const IrInst* target = def_stripped(call.srcs[0]);

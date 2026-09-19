@@ -4,11 +4,15 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <set>
+#include <tuple>
+#include <vector>
 
 #include <spelunk/binary/binary.hpp>
 #include <spelunk/binary/pe.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/disasm/register.hpp>
+#include <spelunk/disasm/x64_decoder.hpp>
 #include <spelunk/ir/ir.hpp>
 #include <spelunk/ir/ssa.hpp>
 
@@ -91,12 +95,96 @@ trace_stack(const IrValue& v, const DefMap& defs, int depth = 0) {
 
 }  // namespace
 
+std::set<const IrInst*> find_x64_stack_reservations(const IrFunction& fn,
+                                                  const Binary& binary,
+                                                  bool allow_subobject_escape) {
+    std::set<const IrInst*> result;
+    if (binary.arch() != Arch::X86_64 || fn.blocks.empty()) return result;
+    const auto entry = fn.block_at.find(fn.start);
+    if (entry == fn.block_at.end()) return result;
+    const auto defs = build_defs(fn);
+    X64Decoder decoder;
+    const auto& first = fn.blocks[entry->second];
+    for (std::size_t index = 0; index < first.insts.size(); ++index) {
+        const auto& store = first.insts[index];
+        if (store.op == IrOp::Call || store.op == IrOp::CallIndirect) break;
+        if (store.op != IrOp::Store || store.src_count < 2 || store.srcs[1].type != IrType::I64 ||
+            store.srcs[1].kind != IrValueKind::Reg || store.srcs[1].version != 0 ||
+            canonical_reg(store.srcs[1].reg) != Reg::Rax) continue;
+        const auto base = trace_stack(store.srcs[0], defs);
+        if (!base || *base >= 0) continue;
+        const auto decoded = decoder.decode(binary.bytes_at(store.source_addr), store.source_addr);
+        if (!decoded || decoded->mnemonic != Mnemonic::Push || decoded->num_operands != 1 ||
+            decoded->operands[0].kind != Operand::Kind::Register ||
+            decoded->operands[0].reg != Reg::Rax) continue;
+
+        // Track overwritten bytes independently: compilers often reserve eight
+        // bytes but use only the upper four for a scalar out-parameter.
+        using State = std::tuple<std::size_t, std::size_t, unsigned>;
+        std::vector<State> pending{{entry->second, index + 1, 0}};
+        std::set<State> seen;
+        bool safe = true;
+        std::size_t budget = 4096;
+        const auto mask = [&](i64 offset, unsigned size) {
+            unsigned bits = 0;
+            for (unsigned byte = 0; byte < 8; ++byte) {
+                const i64 address = *base + byte;
+                if (offset <= address && static_cast<u64>(address) - static_cast<u64>(offset) < size)
+                    bits |= 1u << byte;
+            }
+            return bits;
+        };
+        while (safe && !pending.empty() && budget) {
+            auto [bi, begin, initialized] = pending.back();
+            pending.pop_back();
+            if (!seen.emplace(bi, begin, initialized).second) continue;
+            const auto& block = fn.blocks[bi];
+            for (std::size_t ii = begin; safe && ii < block.insts.size(); ++ii) {
+                if (!budget) { safe = false; break; }
+                --budget;
+                const auto& inst = block.insts[ii];
+                if (inst.op == IrOp::BranchIndirect && initialized != 0xffu) safe = false;
+                if (inst.op == IrOp::Load && inst.src_count && inst.segment == Reg::None) {
+                    if (auto offset = trace_stack(inst.srcs[0], defs))
+                        safe &= (mask(*offset, type_bits(inst.dst.type) / 8) & ~initialized) == 0;
+                }
+                if (inst.op == IrOp::Store && inst.src_count >= 2 && inst.segment == Reg::None) {
+                    if (auto offset = trace_stack(inst.srcs[0], defs))
+                        initialized |= mask(*offset, type_bits(inst.srcs[1].type) / 8);
+                }
+                // Escaped subobjects must be initialized from the passed
+                // address through the end of the reservation. Do not treat
+                // the synthetic call.stack_pointer marker as an escape.
+                const bool escapes = (inst.op == IrOp::Intrinsic && inst.name != "call.stack_pointer") ||
+                    inst.op == IrOp::Return || inst.op == IrOp::Store || inst.op == IrOp::CallIndirect;
+                if (escapes) for (u8 i = inst.op == IrOp::Store ? 1 : 0; i < inst.src_count; ++i) {
+                    const auto offset = trace_stack(inst.srcs[i], defs);
+                    if (offset && *offset >= *base && static_cast<u64>(*offset) - static_cast<u64>(*base) < 8) {
+                        // Pseudo-C may describe the initialized subobject;
+                        // strict exports cannot assume an unknown callee will
+                        // never look backwards into the reservation's padding.
+                        const unsigned required = allow_subobject_escape ? mask(*offset, 8) : 0xffu;
+                        safe &= (required & ~initialized) == 0;
+                    }
+                }
+            }
+            for (const auto successor : block.successors) {
+                if (const auto next = fn.block_at.find(successor); next != fn.block_at.end())
+                    pending.emplace_back(next->second, 0, initialized);
+            }
+        }
+        if (safe && pending.empty()) result.insert(&store);
+    }
+    return result;
+}
+
 StackFrameLayout compute_frame_layout(const IrFunction& fn,
                                        const Binary* binary) {
     StackFrameLayout layout;
     if (fn.blocks.empty()) return layout;
 
     const DefMap defs = build_defs(fn);
+    const auto reservations = binary ? find_x64_stack_reservations(fn, *binary) : std::set<const IrInst*>{};
 
     // Higher-priority observation: a Load/Store directly at the slot
     // tells us its real access width. Wider wins - a slot read both as
@@ -136,6 +224,7 @@ StackFrameLayout compute_frame_layout(const IrFunction& fn,
 
     for (const auto& bb : fn.blocks) {
         for (const auto& inst : bb.insts) {
+            if (reservations.contains(&inst)) continue;
             if (inst.op == IrOp::Load) {
                 if (inst.src_count >= 1) {
                     if (auto off = trace_stack(inst.srcs[0], defs); off) {

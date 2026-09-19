@@ -1614,6 +1614,10 @@ if(Python3_Interpreter_FOUND)
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/varint_test.py"
                     $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
             set_tests_properties(varint_semantics PROPERTIES TIMEOUT 120)
+            add_test(NAME x64_call_frame_semantics
+                COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/x64_call_frame_test.py"
+                    $<TARGET_FILE:spelunk_cli> "${CMAKE_C_COMPILER}")
+            set_tests_properties(x64_call_frame_semantics PROPERTIES TIMEOUT 120)
             add_test(NAME dwarf_export_semantics
                 COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tests/dwarf_export_test.py"
                     "$<TARGET_FILE:spelunk_cli>" "${CMAKE_C_COMPILER}")

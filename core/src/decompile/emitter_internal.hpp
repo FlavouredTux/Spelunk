@@ -94,6 +94,7 @@ struct Emitter {
     // will name these slots `local_<hex>` / `arg_<hex>` to match the
     // declarations we emit at function entry.
     StackFrameLayout                                 frame_layout;
+    std::set<const IrInst*>                          stack_reservation_stores;
     // Number of recovered source arguments for the function being emitted.
     // self_arg_layout preserves mixed PPC GPR/FPR order; self_arity remains
     // the compact count used by the existing header/name passes.
@@ -1361,6 +1362,8 @@ struct Emitter {
     // PPC uses ABI-sized slots and verifies the outgoing receiver.
     [[nodiscard]] std::optional<RenderedCall>
     render_ppc_virtual_call(const IrInst& inst, const CallArgPack& pack) const;
+    [[nodiscard]] std::optional<RenderedCall>
+    render_x64_virtual_call(const IrInst& inst, const CallArgPack& pack) const;
     void emit_merge_edge_assignments(addr_t block_start, std::string_view ind,
                                      std::string& out) const;
     void emit_block(addr_t block_addr, int depth, std::string& out) const;

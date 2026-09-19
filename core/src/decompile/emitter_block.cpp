@@ -870,6 +870,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
             }
         }
         if (auto virtual_call = render_ppc_virtual_call(inst, pack)) return *virtual_call;
+        if (auto virtual_call = render_x64_virtual_call(inst, pack)) return *virtual_call;
         const std::string args = format_call_args_fallback(pack.ints,
                                                            &used_args);
         // Virtual-method-dispatch shape recognition: when the

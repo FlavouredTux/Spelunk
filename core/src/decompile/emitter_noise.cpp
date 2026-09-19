@@ -151,6 +151,7 @@ bool Emitter::renders_stack_chk_guard_value(const IrValue& v) const {
 }
 
 bool Emitter::is_abi_noise(const IrInst& inst) const {
+    if (stack_reservation_stores.contains(&inst)) return true;
     // Stack-base register writes → frame manipulation.
     if (inst.op == IrOp::Assign && inst.dst.kind == IrValueKind::Reg) {
         if (is_stack_base_reg(inst.dst.reg)) return true;

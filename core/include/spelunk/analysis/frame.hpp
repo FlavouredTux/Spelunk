@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <set>
 #include <string>
 
 #include <spelunk/common/types.hpp>
@@ -9,6 +10,12 @@
 namespace spelunk {
 
 class Binary;
+
+// Entry push-rax stores whose incoming bytes are never consumed before
+// replacement. The stack allocation itself remains in the IR.
+[[nodiscard]] std::set<const IrInst*>
+find_x64_stack_reservations(const IrFunction& fn, const Binary& binary,
+                            bool allow_subobject_escape = false);
 
 // One recovered stack-frame slot. `offset` is signed, measured from
 // the function's entry-rsp. Negative ⇒ local (below saved rsp);

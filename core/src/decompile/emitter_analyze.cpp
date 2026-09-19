@@ -139,6 +139,7 @@ void Emitter::analyze(const IrFunction& f) {
         }
     }
     analyze_msvc_security_cookie_calls();
+    if (binary) stack_reservation_stores = find_x64_stack_reservations(f, *binary, !options.c_source);
     analyze_abi_noise();
     ssa_uses.scan_visible(f, hidden);
     // Preserve the time at which a load happened. SSA versions registers
@@ -313,6 +314,7 @@ void Emitter::analyze(const IrFunction& f) {
     std::set<i64> nonforwardable_stack_slots;
     for (const auto& bb : f.blocks) {
         for (const auto& inst : bb.insts) {
+            if (stack_reservation_stores.contains(&inst)) continue;
             if (inst.op == IrOp::Load && inst.src_count >= 1 &&
                 inst.segment == Reg::None) {
                 if (auto off = stack_offset(inst.srcs[0]); off) {

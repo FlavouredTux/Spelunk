@@ -26,7 +26,6 @@ namespace spelunk::cli {
 
 int run_dump_types();
 int run_export_annotations(const Args& args);
-int run_apply_spelunk(const Args& args, const Binary& b);
 
 // Pre-analysis side effects (no exit code - caller continues).
 

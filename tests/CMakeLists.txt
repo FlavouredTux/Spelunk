@@ -43,14 +43,6 @@ add_executable(spelunk_import_sigs_test import_sigs_test.cpp)
 target_link_libraries(spelunk_import_sigs_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME import_sigs_unit COMMAND spelunk_import_sigs_test)
 
-# Unit tests for the .spelunk declarative scripting format. Self-contained:
-# a synthetic MockBinary with one defined function and a rodata string
-# the function references, so the [from-strings] path has a real
-# string→xref→containing-fn pipeline to walk.
-add_executable(spelunk_declarative_test declarative_test.cpp)
-target_link_libraries(spelunk_declarative_test PRIVATE spelunk::core spelunk::flags)
-add_test(NAME declarative_unit COMMAND spelunk_declarative_test)
-
 # Unit test for PDB ingestion. Builds a synthetic v7 MSF in-memory
 # (superblock, directory, DBI header, S_PUB32 records) so the parser
 # round-trip is exercised without depending on a real Microsoft toolchain.
@@ -1514,21 +1506,6 @@ spelunk_golden_test(
     FIXTURE tail_call
     ARGS    "--callees|inner"
     GOLDEN  tail_call.inner.callees.txt
-)
-
-# --apply --dry-run on a hand-written .spelunk fixture exercising
-# [rename] / [note] / [signature] (deterministic sections; the
-# pattern-rename / from-strings paths are unit-tested separately
-# because their output set depends on the gcc-emitted sub_* layout
-# which drifts across patch versions). Locks the parser, the resolver
-# fallback (LHS by name resolves through the symbol table), the
-# signature parser, and the to_text serializer all the way through
-# the CLI's run_apply_spelunk pipeline.
-spelunk_golden_test(
-    NAME    return_value_apply_dry_run
-    FIXTURE return_value
-    ARGS    "--apply|${_fixture_dir}/return_value.spelunk|--dry-run|--no-cache|--quiet"
-    GOLDEN  return_value.apply_dry_run.txt
 )
 
 # --containing-fn: resolve an address inside the body of `big` to its

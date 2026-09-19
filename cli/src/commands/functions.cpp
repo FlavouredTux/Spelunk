@@ -33,7 +33,6 @@
 #include <spelunk/disasm/ppc_decoder.hpp>
 #include <spelunk/ir/ir.hpp>
 #include <spelunk/ir/lifter.hpp>
-#include <spelunk/script/declarative.hpp>
 
 #include "../args.hpp"
 #include "../builders.hpp"

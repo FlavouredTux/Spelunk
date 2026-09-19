@@ -440,36 +440,7 @@ files.
 
 ## Annotations and source knowledge
 
-Use a declarative `.spelunk` file for reusable facts:
-
-```spelunk
-[rename]
-0x401234 = update_player ; conf=0.95 ; src=hand ; ev=unique log and callers
-
-[signature]
-0x401234 = int update_player(Player* player, float dt)
-
-[field]
-update_player:player+0x44 = currentMap
-
-[constant]
-0x40000 = PLAYER_FLAG_FLIPPED
-
-[note]
-0x401234 = state transition owner; verify case 9
-```
-
-Preview before writing:
-
-```sh
-spelunk --apply project.spelunk --dry-run --annotations project.annotations ./target
-spelunk --apply project.spelunk --annotations project.annotations ./target
-spelunk --list-annotations --annotations project.annotations ./target
-spelunk -p --show-provenance --annotations project.annotations \
-  -s update_player ./target
-```
-
-For a single fact:
+Use the annotation CLI to record reusable facts:
 
 ```sh
 spelunk --annotate 0x401234 --set-name update_player \
@@ -478,9 +449,8 @@ spelunk --annotate 0x401234 --set-name update_player \
 ```
 
 Annotations can express renames, notes, signatures, parameter-scoped fields,
-constants, pattern renames, string-derived renames, and deletions. Direct user
-facts take priority over inference. See [docs/scripting.md](docs/scripting.md)
-for exact syntax, escaping, provenance, storage, and conflict rules.
+and constants. Direct user facts take priority over inference. See
+[docs/annotations.md](docs/annotations.md) for storage and provenance.
 
 ## Reading output correctly
 
@@ -584,9 +554,6 @@ cmake --build build/release-local --target spelunk_cli -j 6
 ln -sfn "$PWD/build/release-local/cli/spelunk" "$HOME/.local/bin/spelunk"
 ```
 
-The Python wrapper is installed with `python -m pip install -e .`; its API is
-documented in [docs/python.md](docs/python.md).
-
 ## Documentation index
 
 - [README.md](README.md): design, features, support matrix, build, and layout
@@ -594,11 +561,10 @@ documented in [docs/python.md](docs/python.md).
   coverage, benchmarks, unit recovery, and CodeWarrior matching
 - [docs/x86.md](docs/x86.md): x86-64 discovery, ABI/type recovery, COFF/DWARF,
   strings, imports, and current limitations
-- [docs/scripting.md](docs/scripting.md): `.spelunk` annotations
+- [docs/annotations.md](docs/annotations.md): annotations
 - [docs/debugger.md](docs/debugger.md): pseudo-C debugger
 - [docs/raw-input.md](docs/raw-input.md): raw bytes and region manifests
 - [docs/forge-spec.md](docs/forge-spec.md): minimum reachability shapes
-- [docs/python.md](docs/python.md): Python wrapper
 
 Keep this manual practical. Add a workflow when an agent needs it repeatedly;
 put detailed implementation semantics and benchmark evidence in the focused

@@ -100,10 +100,9 @@ struct Args {
                                     // large dumps where most fns are wine-DLL noise.
     std::vector<std::string> pat_paths; // --pat PATH (repeatable): FLIRT-style .pat sig files to apply
     std::vector<std::string> force_fn_starts; // --force-fn-start VA (repeatable): synthetic Function symbols at these VAs
-    std::string apply_spelunk;        // --apply PATH: declarative .spelunk script applied to annotations
     // --annotate ADDR: append a single annotation to the resolved file
-    // (explicit --annotations beats sidecar beats cache, same chain
-    // --apply uses). Companion flags pick what to set: --set-name,
+    // (explicit --annotations beats sidecar beats cache).
+    // Companion flags pick what to set: --set-name,
     // --set-note, --set-signature; --confidence / --evidence / --source
     // attach provenance to whichever record was written.
     std::string annotate_addr;
@@ -120,7 +119,7 @@ struct Args {
     bool no_pdb = false;            // --no-pdb: skip PDB sidecar discovery / ingestion entirely
     bool kismet_events = false;     // --kismet-events: list wrapper -> Ubergraph entry offsets
     bool infer_string_names = false; // --infer-string-names: derive names from strong log/string anchors
-    bool dry_run = false;           // --dry-run: with --apply, don't write the result; print TSV to stdout
+    bool dry_run = false;           // --dry-run: with --annotate, don't write the result; print TSV to stdout
     bool no_cache = false;          // disable the disk cache entirely
     bool quick = false;             // --quick: bounded/partial refs probe; avoid full xrefs build
     bool full_analysis = false;     // force pass-2 CFG walk on packed binaries

@@ -139,7 +139,6 @@ constexpr auto kValueFlags = std::to_array<ValueFlag>({
     {"",   "--evidence",     &Args::annotate_evidence},
     {"",   "--source",       &Args::annotate_source},
     {"",   "--apply-patches", &Args::apply_patches},
-    {"",   "--apply",       &Args::apply_spelunk},
     {"",   "--pdb",         &Args::pdb_path},
     {"",   "--kismet",      &Args::kismet_bundle},
     {"",   "--kismet-event", &Args::kismet_event},

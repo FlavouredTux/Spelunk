@@ -72,7 +72,7 @@ When to pick which:
 Raw input bypasses all the container-specific extras:
 
 - No symbol table - every discovered function reads as `sub_<hex>`
-  unless you pair with `--annotations` or `--apply <script>`.
+  unless you supply names with `--annotations` or `--annotate`.
 - No imports / exports *out of the box* - runtime captures of a
   process *do* contain the IAT bytes, but Spelunk can't recognise an IAT
   without the IMAGE_DIRECTORY_ENTRY_IMPORT directory the PE loader

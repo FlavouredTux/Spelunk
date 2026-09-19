@@ -58,7 +58,7 @@ int main() {
     const auto root = scratch_root();
     const auto cache = root / "cache";
 
-    // The annotations and declarative loaders share this strict decimal
+    // The annotations loader uses this strict decimal
     // parser. Pin its accepted grammar, clamping, and failure contract here.
     {
         struct ValidCase {

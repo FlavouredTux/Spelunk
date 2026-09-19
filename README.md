@@ -118,9 +118,8 @@ Other pieces, each documented under `docs/`:
 - **Debugger** (`--debug`): breakpoints on pseudo-C lines, backtraces
    through `.eh_frame`, ptrace on Linux and Mach on macOS. See
    [docs/debugger.md](docs/debugger.md).
-- **Annotations and `.spelunk` scripts**: renames, signatures and field
-  names in a sidecar file or a small declarative script. See
-  [docs/scripting.md](docs/scripting.md).
+- **Annotations**: renames, signatures, notes and field names in a sidecar
+  file. See [docs/annotations.md](docs/annotations.md).
 - **Runtime memory**: minidumps and raw region scrapes for packed targets,
   plus `--trace` to feed observed indirect-call edges back in. See
   [docs/raw-input.md](docs/raw-input.md).
@@ -130,19 +129,6 @@ Other pieces, each documented under `docs/`:
 
 Expensive passes cache under `~/.cache/spelunk/`, keyed on the file's path,
 size, mtime and the Spelunk version. `--no-cache` bypasses it.
-
-Python wrapper (shells out to the CLI):
-
-```sh
-python -m pip install -e .
-```
-
-```python
-from spelunkpy import Spelunk
-
-e = Spelunk("tests/fixtures/gotos")
-print(e.function("multi_exit").pseudo())
-```
 
 ## Layout
 
@@ -156,10 +142,8 @@ core/       the library
   structure/  region builder
   decompile/  pseudo-C emitter
   debug/      ptrace, perf and Mach targets, unwinders
-  script/     .spelunk scripts
 cli/        the spelunk command
 gui/        Qt 6 front end
-python/     spelunkpy
 tests/      unit tests and golden-output tests
 docs/
 ```

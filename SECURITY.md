@@ -15,8 +15,7 @@ the maintainer; the contact address is published with the repository.
 
 - Heap / stack corruption from a crafted binary, sidecar, or trace.
 - Out-of-bounds reads in any parser or decoder.
-- Path traversal or arbitrary-write through annotation files,
-  declarative scripts, or cache paths.
+- Path traversal or arbitrary-write through annotation files or cache paths.
 - Anything in the debugger backends that lets a tracee escape its
   intended sandbox.
 

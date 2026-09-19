@@ -146,7 +146,7 @@ add_library(spelunk_core STATIC
     src/decompile/emitter_text.cpp
     src/decompile/emitter_text_ppc.cpp
     src/decompile/emitter_types.cpp
-    src/script/declarative.cpp
+    src/common/annotation_signature.cpp
     src/debug/target.cpp
     src/debug/unwind_rbp.cpp
     src/debug/unwind_eh.cpp

@@ -423,7 +423,6 @@ int main(int argc, char** argv) {
 
     if (!args.trace_path.empty())          load_trace_edges(args, b);
     if (!args.export_annotations.empty())  return run_export_annotations(args);
-    if (!args.apply_spelunk.empty())         return run_apply_spelunk(args, b);
 
     if (args.debug)                        return run_debug(args, &b, aux_specs);
     if (args.xrefs)              return run_xrefs(args, b);

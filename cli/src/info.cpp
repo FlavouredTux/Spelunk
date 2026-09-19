@@ -248,14 +248,12 @@ void help_fingerprints() {
 }
 
 void help_ann() {
-    std::println("Annotations / .spelunk scripts:");
+    std::println("Annotations:");
     std::println("      --annotate ADDR  append one annotation to the resolved file. Companion");
     std::println("                       flags: --set-name NEW / --set-note TEXT / --set-signature DECL,");
     std::println("                       optionally --confidence FLOAT / --evidence TEXT / --source TAG");
     std::println("                       (default `cli`). Pair with --dry-run to preview.");
-    std::println("      --apply PATH     apply a declarative .spelunk script (renames, sigs, notes,");
-    std::println("                       constants, pattern-renames, log-format renames, deletes)");
-    std::println("      --dry-run        with --apply: dump the would-be TSV to stdout, don't write");
+    std::println("      --dry-run        with --annotate: dump the would-be TSV to stdout, don't write");
     std::println("      --list-annotations  dump every record in the resolved annotations file");
     std::println("                       (rename / note / signature) with its meta");
     std::println("      --annotations P  explicit project file (overrides the sidecar/cache auto-load)");
@@ -360,7 +358,7 @@ void print_help() {
     std::println("  ana      ipa, eh, rtti, objc, identify, resolve-calls,");
     std::println("           int3, syscalls, forge-spec, FLIRT");
     std::println("  fingerprints  content hashes, diff");
-    std::println("  ann      annotate, apply, list-annotations, dry-run, .spelunk scripts");
+    std::println("  ann      annotate, list-annotations, dry-run");
     std::println("  dbg      --debug, attach, backends, aux-bin");
     std::println("  load     DTK projects, pdb, Kismet, regions, raw-bytes, force-fn-start, module");
     std::println("  data     Clang headers, typed initializers, SPM event scripts");

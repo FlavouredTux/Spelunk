@@ -23,7 +23,6 @@
 #include <spelunk/common/timing.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/ir/lifter.hpp>
-#include <spelunk/script/declarative.hpp>
 
 #include "../fingerprint.hpp"
 #include "../subcommands.hpp"

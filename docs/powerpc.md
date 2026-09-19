@@ -716,20 +716,15 @@ An annotation takes precedence over inferred arity, types, and interleaving.
 This is the preferred way to pin a known SDK or decompilation-project
 prototype:
 
-```spelunk
-[signature]
-0x8011f45c = void update(double scale, Object* object, Vec3* position)
-```
-
-Apply it with the normal annotation workflow:
-
 ```sh
-spelunk --apply ppc-signatures.spelunk --annotations project.annotations <binary>
+spelunk --annotate 0x8011f45c \
+  --set-signature "void update(double scale, Object* object, Vec3* position)" \
+  --annotations project.annotations <binary>
 ```
 
-Known import and platform SDK signatures receive the same mapping. Parameter
-names may also be used by `[field]` directives; the complete annotation syntax
-is documented in [scripting.md](scripting.md).
+Known import and platform SDK signatures receive the same mapping.
+Parameter-scoped field names can be stored in the annotation file; see
+[annotations.md](annotations.md).
 
 ## Current limits
 

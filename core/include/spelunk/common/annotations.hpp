@@ -24,6 +24,9 @@ struct FunctionSig {
     bool                  variadic = false;
 };
 
+// Parse a C-style declaration for --set-signature.
+[[nodiscard]] std::optional<FunctionSig> parse_signature(std::string_view src);
+
 struct ImportedRecordField {
     std::string name;
     std::string type;

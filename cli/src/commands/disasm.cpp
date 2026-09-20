@@ -25,6 +25,7 @@
 #include <spelunk/disasm/decoder.hpp>
 
 #include "../args.hpp"
+#include "../build_stamp.hpp"
 #include "../cli_error.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
@@ -180,6 +181,10 @@ int run_disasm_at(const Args& args, const Binary& b) {
         spelunk::diagnostic::print(
             "spelunk: --disasm-at: warning: {:#x} is not an instruction boundary in its containing function",
             *va);
+    } else if (boundary == true && b.arch() == Arch::X86_64 &&
+               looks_like_address(args.disasm_at)) {
+        spelunk::diagnostic::print(
+            "spelunk: --disasm-at: verified instruction boundary at {:#x}", *va);
     }
     if (args.json) {
         auto out = disasm_probe_json(b, static_cast<addr_t>(*va), count);
@@ -189,6 +194,8 @@ int run_disasm_at(const Args& args, const Binary& b) {
             std::fwrite(error.data(), 1, error.size(), stdout);
             return EXIT_FAILURE;
         }
+        if (!out->empty() && out->front() == '{')
+            out->insert(1, build_json_member() + ",");
         std::fwrite(out->data(), 1, out->size(), stdout);
         return EXIT_SUCCESS;
     }
@@ -199,11 +206,14 @@ int run_disasm_at(const Args& args, const Binary& b) {
     if (!rv) return report(rv.error());
     // Trim to N lines of disassembly (skip the header/comments).
     std::size_t emitted = 0;
-    std::string out;
+    std::string out = build_comment(";");
     if (boundary == false) {
         out += std::format(
             "; warning: {:#x} is not an instruction boundary; decoding starts mid-instruction\n",
             *va);
+    } else if (boundary == true && b.arch() == Arch::X86_64 &&
+               looks_like_address(args.disasm_at)) {
+        out += std::format("; verified instruction boundary: {:#x}\n", *va);
     }
     if (!addr_in_executable_section_cli(b, static_cast<addr_t>(*va))) {
         const auto sec = section_name_containing(b, static_cast<addr_t>(*va));

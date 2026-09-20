@@ -28,6 +28,7 @@
 
 #include "args.hpp"
 #include "cli_error.hpp"
+#include "build_stamp.hpp"
 #include "deadline.hpp"
 #include "fingerprint.hpp"
 #include "info.hpp"
@@ -254,7 +255,7 @@ int run_cli(spelunk::cli::Args args) {
         return EXIT_SUCCESS;
     }
     if (args.version) {
-        std::println("spelunk {}", SPELUNK_VERSION_STRING);
+        std::println("spelunk {} {}", build_version(), build_revision());
         return EXIT_SUCCESS;
     }
     std::optional<spelunk::DtkProject> dtk_main_project;

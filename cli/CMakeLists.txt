@@ -41,6 +41,29 @@ target_compile_definitions(spelunk_cli PRIVATE
     SPELUNK_VERSION_STRING="${PROJECT_VERSION}"
 )
 
+execute_process(
+    COMMAND git rev-parse --short=12 HEAD
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+    OUTPUT_VARIABLE SPELUNK_GIT_REVISION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE SPELUNK_GIT_RESULT)
+if(NOT SPELUNK_GIT_RESULT EQUAL 0 OR SPELUNK_GIT_REVISION STREQUAL "")
+    set(SPELUNK_GIT_REVISION "unknown")
+else()
+    execute_process(
+        COMMAND git status --porcelain --untracked-files=no
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        OUTPUT_VARIABLE SPELUNK_GIT_DIRTY
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(NOT SPELUNK_GIT_DIRTY STREQUAL "")
+        string(APPEND SPELUNK_GIT_REVISION "-dirty")
+    endif()
+endif()
+target_compile_definitions(spelunk_cli PRIVATE
+    SPELUNK_GIT_REVISION="${SPELUNK_GIT_REVISION}")
+
 find_package(Threads REQUIRED)
 target_link_libraries(spelunk_cli PRIVATE
     Threads::Threads

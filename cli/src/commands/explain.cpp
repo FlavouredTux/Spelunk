@@ -26,6 +26,7 @@
 #include <spelunk/ir/lifter.hpp>
 
 #include "../fingerprint.hpp"
+#include "../build_stamp.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
 #include "common.hpp"
@@ -462,8 +463,8 @@ int run_callees(const Args& args, const Binary& b) {
     const auto& cs = report.callees;
     if (args.json) {
         std::string out = std::format(
-            "{{\"va\":\"{:#x}\",\"extent_complete\":{},\"callees\":[",
-            va, report.extent_complete ? "true" : "false");
+            "{{{},\"va\":\"{:#x}\",\"extent_complete\":{},\"callees\":[",
+            build_json_member(), va, report.extent_complete ? "true" : "false");
         for (std::size_t i = 0; i < cs.size(); ++i) {
             if (i) out += ',';
             out += std::format("{{\"va\":\"{:#x}\",\"kind\":\"{}\"}}",
@@ -477,7 +478,7 @@ int run_callees(const Args& args, const Binary& b) {
         out += "]}\n";
         std::fwrite(out.data(), 1, out.size(), stdout);
     } else {
-        std::string out;
+        std::string out = build_comment("#");
         for (const auto& c : cs) {
             out += std::format("{:#x}\t{}\t@{:#x}\n", c.target,
                                callee_kind_name(c.kind), c.site);

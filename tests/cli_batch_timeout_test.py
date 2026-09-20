@@ -23,9 +23,10 @@ def run(args, status=0):
 def records(result):
     parsed = [json.loads(line) for line in result.stdout.splitlines()]
     for row in parsed:
-        assert set(row) == {'schema_version', 'type', 'symbol', 'address', 'name',
+        assert set(row) == {'schema_version', 'build', 'type', 'symbol', 'address', 'name',
                             'view', 'status', 'output', 'error'}, row
         assert row['schema_version'] == 1 and row['type'] == 'function', row
+        assert set(row['build']) == {'version', 'revision'} and row['build']['revision'], row
         if row['status'] == 'ok':
             assert row['error'] is None and isinstance(row['output'], str), row
             assert int(row['address'], 16) > 0 and row['name'], row
@@ -55,7 +56,9 @@ with tempfile.TemporaryDirectory(prefix='spelunk-cli-batch-') as tmp:
         assert rows[1]['error']['kind'] == 'resolve-failed', rows
         for row in (rows[0], rows[2]):
             plain = run(['--no-cache', flag, '-s', row['symbol'], fixture])
-            assert row['output'] == plain.stdout, (flag, row, plain.stdout)
+            plain_body = plain.stdout.split('\n', 1)[1]
+            assert 'spelunk-build:' in plain.stdout.splitlines()[0], plain.stdout
+            assert row['output'] == plain_body, (flag, row, plain.stdout)
             single = records(run(['--json', '--no-cache', flag, '-s', row['symbol'], fixture]))
             assert single == [row], (flag, row, single)
 

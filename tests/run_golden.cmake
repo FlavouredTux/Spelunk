@@ -59,6 +59,11 @@ endif()
 
 # Normalize trailing whitespace / final newline for stable comparison.
 string(REGEX REPLACE "[ \t]+\n" "\n" _out "${_out}")
+# Build stamps deliberately vary by commit. Dedicated CLI tests validate their
+# presence and shape; golden content comparisons remove them so every commit
+# does not mechanically rewrite hundreds of semantic fixtures.
+string(REGEX REPLACE "(^|\n)(//|;|#) spelunk-build: [^\n]*\n" "\\1" _out "${_out}")
+string(REGEX REPLACE "\"build\":\{\"version\":\"[^\"]*\",\"revision\":\"[^\"]*\"\}," "" _out "${_out}")
 
 if(DEFINED ENV{UPDATE_GOLDEN})
     file(WRITE "${GOLDEN}" "${_out}")

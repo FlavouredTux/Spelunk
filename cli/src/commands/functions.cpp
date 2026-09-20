@@ -40,6 +40,7 @@
 #include "../args.hpp"
 #include "../builders.hpp"
 #include "../cli_error.hpp"
+#include "../build_stamp.hpp"
 #include "../subcommands.hpp"
 #include "../util.hpp"
 #include "common.hpp"
@@ -550,6 +551,8 @@ int run_functions(const Args& args, const Binary& b) {
     if (!args.json && args.functions_pattern.empty() && !scope.active && !any_rename &&
         !args.row_limit_set) {
         ScopedTimer phase("functions.emit_raw");
+        const auto stamp = build_comment("#");
+        std::fwrite(stamp.data(), 1, stamp.size(), stdout);
         std::fwrite(tsv.data(), 1, tsv.size(), stdout);
         return EXIT_SUCCESS;
     }
@@ -613,9 +616,9 @@ int run_functions(const Args& args, const Binary& b) {
             first = false;
             const std::string_view size_s = line.substr(addr_end + 1, size_end - addr_end - 1);
             const std::string_view kind_s = line.substr(size_end + 1, kind_end - size_end - 1);
-            std::string row =
-                std::format("{{\"addr\":\"{}\",\"size\":\"{}\",\"kind\":\"{}\",\"name\":\"{}\"",
-                            addr_s, size_s, kind_s, json_escape(effective_name));
+            std::string row = std::format(
+                "{{{},\"addr\":\"{}\",\"size\":\"{}\",\"kind\":\"{}\",\"name\":\"{}\"",
+                build_json_member(), addr_s, size_s, kind_s, json_escape(effective_name));
             if (row_addr) {
                 if (const auto* m = ann_for_print.meta_for_rename(*row_addr); m) {
                     if (m->confidence > 0.0f) {
@@ -632,11 +635,21 @@ int run_functions(const Args& args, const Binary& b) {
             row += "}";
             std::fwrite(row.data(), 1, row.size(), stdout);
         } else if (rn) {
+            if (first) {
+                const auto stamp = build_comment("#");
+                std::fwrite(stamp.data(), 1, stamp.size(), stdout);
+                first = false;
+            }
             // Reconstruct the line with the annotation name in place.
             std::fwrite(line.data(), 1, name_start, stdout);
             std::fwrite(effective_name.data(), 1, effective_name.size(), stdout);
             std::fputc('\n', stdout);
         } else {
+            if (first) {
+                const auto stamp = build_comment("#");
+                std::fwrite(stamp.data(), 1, stamp.size(), stdout);
+                first = false;
+            }
             std::fwrite(line.data(), 1, line.size(), stdout);
             std::fputc('\n', stdout);
         }

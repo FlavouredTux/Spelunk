@@ -45,6 +45,7 @@
 #include <spelunk/ir/ssa.hpp>
 
 #include "../cli_error.hpp"
+#include "../build_stamp.hpp"
 #include "../header_import.hpp"
 #include "../info.hpp"
 #include "../subcommands.hpp"
@@ -404,8 +405,8 @@ int run_emit(const Args& args, const Binary& b) {
                 const auto kind = win ? (output ? std::string_view{} : output.error().kind_name()) : "resolve-failed";
                 const std::string error = output ? "null" : std::format(
                     "{{\"kind\":{},\"message\":{}}}", quote(kind), quote(output.error().message));
-                std::println("{{\"schema_version\":1,\"type\":\"function\",\"symbol\":{},\"address\":{},\"name\":{},\"view\":{},\"status\":\"{}\",\"output\":{},\"error\":{}}}",
-                    quote(view_symbols[i]), win ? quote(std::format("{:#x}", win->start)) : "null",
+                std::println("{{\"schema_version\":1,{},\"type\":\"function\",\"symbol\":{},\"address\":{},\"name\":{},\"view\":{},\"status\":\"{}\",\"output\":{},\"error\":{}}}",
+                    build_json_member(), quote(view_symbols[i]), win ? quote(std::format("{:#x}", win->start)) : "null",
                     win ? quote(win->label) : "null", quote(view), output ? "ok" : "error",
                     output ? quote(*output) : "null", error);
                 // Preserve completed results if a later function times out.
@@ -419,7 +420,10 @@ int run_emit(const Args& args, const Binary& b) {
                     std::println("");
                 std::println("// spelunk-symbol: {}", view_symbols[i]);
             }
-            if (output) std::print("{}", *output);
+            if (output) {
+                const auto prefix = (args.pseudo || args.strct) ? "//" : ";";
+                std::print("{}{}", build_comment(prefix), *output);
+            }
             else (void)report(output.error());
             ++emitted;
         }

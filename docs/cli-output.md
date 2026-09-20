@@ -19,6 +19,7 @@ functions, in either JSON or plain-text mode.
 Each record has these fields:
 
 - `schema_version`: currently `1`.
+- `build`: Spelunk semantic `version` and Git `revision` used to produce it.
 - `type`: `function`.
 - `symbol`: the requested selector (empty when using the default target).
 - `address`: resolved address as a hexadecimal string, or `null` if unresolved.
@@ -36,6 +37,10 @@ manifest) are reported on stderr before any function records are emitted.
 Exit status is `0` if all requested functions succeeded and `1` if any failed.
 Completed JSON records are flushed immediately. Existing inventory commands
 such as `--functions --json` retain their own output formats.
+
+Plain function views begin with a `spelunk-build` comment. Callee reports and
+disassembly probes carry the same stamp; their JSON objects use the `build`
+field. A revision ending in `-dirty` was built from local uncommitted changes.
 
 ## Timeouts
 

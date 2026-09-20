@@ -287,22 +287,29 @@ decode_disasm_probe(const Binary& b, addr_t start, std::size_t count) {
     DisasmProbe p;
     addr_t ip = start;
     std::size_t off = 0;
-    while (off < bytes.size() && p.insns.size() < count) {
+    bool steal_complete = false;
+    std::size_t scanned = 0;
+    constexpr std::size_t kMaxBasicBlockBytes = 1u << 20;
+    while (off < bytes.size() && off < kMaxBasicBlockBytes) {
         auto decoded = dec.decode(bytes.subspan(off), ip);
         if (!decoded) break;
         const Instruction insn = *decoded;
-        p.needs_relocation = p.needs_relocation ||
-            cli_rip_relative_target(insn).has_value() ||
-            branch_target(insn).has_value();
-        p.steal_len += insn.length;
-        p.insns.push_back(insn);
+        if (p.insns.size() < count) p.insns.push_back(insn);
+        if (!steal_complete) {
+            p.needs_relocation = p.needs_relocation ||
+                cli_rip_relative_target(insn).has_value() ||
+                branch_target(insn).has_value();
+            p.steal_len += insn.length;
+            steal_complete = p.steal_len >= 14;
+        }
         ip += insn.length;
         off += insn.length;
+        ++scanned;
         if (p.first_bb_end == 0 && ends_basic_block(insn.mnemonic)) {
             p.first_bb_end = ip;
             break;
         }
-        if (p.steal_len >= 14) break;
+        if (scanned >= 65536) break;
     }
     if (p.first_bb_end == 0) p.first_bb_end = ip;
     p.safe_abs_trampoline = p.steal_len >= 14 && !p.needs_relocation;
@@ -361,7 +368,8 @@ Result<std::string> disasm_probe_json(const Binary& b, addr_t start,
 
 std::string disasm_probe_summary(const Binary& b, addr_t start,
                                                std::size_t count) {
-    auto rv = decode_disasm_probe(b, start, count);
+    (void)count;
+    auto rv = decode_disasm_probe(b, start, 0);
     if (!rv) return {};
     const auto& p = *rv;
     return std::format(

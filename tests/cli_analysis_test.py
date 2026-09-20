@@ -47,6 +47,17 @@ with tempfile.TemporaryDirectory(prefix='spelunk-cli-analysis-') as directory:
     exact = invoke(['--disasm-at', hex(start), '--count', '2', binary])
     assert 'not an instruction boundary' not in exact.stderr, exact
     assert 'verified instruction boundary' in exact.stderr and exact.stdout.startswith('; spelunk-build: '), exact
+    text_short = invoke(['--disasm-at', hex(start), '--count', '1', binary]).stdout
+    text_long = invoke(['--disasm-at', hex(start), '--count', '3', binary]).stdout
+    summary = re.compile(r'trampoline: steal_len=(\d+).*first_bb_end=(0x[0-9a-f]+)')
+    short_meta, long_meta = summary.search(text_short).groups(), summary.search(text_long).groups()
+    assert short_meta == long_meta, (text_short, text_long)
+    short_json = json.loads(invoke(['--json', '--disasm-at', hex(start), '--count', '1', binary]).stdout)
+    long_json = json.loads(invoke(['--json', '--disasm-at', hex(start), '--count', '3', binary]).stdout)
+    assert len(short_json['instructions']) == 1 and len(long_json['instructions']) == 3
+    assert (short_json['recommended_steal_len'], short_json['first_basic_block_end']) == (
+        int(short_meta[0]), short_meta[1]) == (
+        long_json['recommended_steal_len'], long_json['first_basic_block_end'])
     json_middle = invoke(['--json', '--disasm-at', hex(start + 2), '--count', '2', binary])
     diagnostics = [json.loads(line) for line in json_middle.stderr.splitlines()]
     assert any('not an instruction boundary' in row['message'] for row in diagnostics), diagnostics

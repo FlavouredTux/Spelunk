@@ -1,15 +1,23 @@
 #include <spelunk/analysis/frame.hpp>
 
+#include <array>
 #include <format>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
 #include <set>
+#include <string_view>
 #include <tuple>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
+#include <spelunk/analysis/cfg_builder.hpp>
 #include <spelunk/binary/binary.hpp>
+#include <spelunk/binary/format.hpp>
 #include <spelunk/binary/pe.hpp>
+#include <spelunk/binary/symbol.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/disasm/register.hpp>
 #include <spelunk/disasm/x64_decoder.hpp>
@@ -93,6 +101,111 @@ trace_stack(const IrValue& v, const DefMap& defs, int depth = 0) {
     return std::format("arg_{:x}", static_cast<u64>(off));
 }
 
+// A narrow proof for local x64 output helpers. Only follow direct calls to
+// small, sized functions; the pointer must stay in the same argument register
+// and may only be the destination of bounded MOV stores. Any read, alias,
+// unsupported instruction, or unknown call keeps the entry push visible.
+[[nodiscard]] std::optional<unsigned>
+callee_writes_only_to_arg(const Binary& binary, addr_t target, Reg arg,
+                          unsigned bytes, std::set<addr_t> active = {}) {
+    if (bytes == 0 || active.size() >= 3 || !active.insert(target).second)
+        return std::nullopt;
+    const Symbol* symbol = nullptr;
+    std::unordered_set<addr_t> entries;
+    entries.reserve(binary.symbols().size());
+    for (const auto& candidate : binary.symbols()) {
+        if (candidate.kind == SymbolKind::Function && !candidate.is_import &&
+            candidate.addr != 0) entries.insert(candidate.addr);
+        if (!symbol && candidate.addr == target && candidate.kind == SymbolKind::Function &&
+            !candidate.is_import && candidate.size > 0 && candidate.size <= 256) {
+            symbol = &candidate;
+        }
+    }
+    if (!symbol || target > std::numeric_limits<addr_t>::max() - symbol->size)
+        return std::nullopt;
+
+    X64Decoder decoder;
+    CfgBuilder builder(binary, decoder, false);
+    builder.seed_known_entries(std::move(entries));
+    auto function = builder.build(target);
+    if (!function || function->blocks.empty() || function->blocks.size() > 12 ||
+        function->end > target + symbol->size) return std::nullopt;
+    unsigned count = 0;
+    bool called = false;
+    unsigned must_write = 0;
+    const bool straight_line_return = function->blocks.size() == 1 &&
+        function->blocks.front().kind == BlockKind::Return;
+    for (const auto& block : function->blocks) {
+        if (block.kind == BlockKind::IndirectJmp || block.kind == BlockKind::Switch ||
+            block.kind == BlockKind::TailCall) return std::nullopt;
+        if (block.kind != BlockKind::Return && block.successors.empty()) return std::nullopt;
+        for (const auto& insn : block.instructions) {
+            if (++count > 96) return std::nullopt;
+            if (insn.mnemonic == Mnemonic::Call) {
+                // A second call, or a call followed by pointer use, would
+                // require tracking the caller-saved argument register.
+                if (called || function->blocks.size() != 1) return std::nullopt;
+                const auto next = branch_target(insn);
+                if (!next) return std::nullopt;
+                const auto nested = callee_writes_only_to_arg(binary, *next, arg,
+                                                               bytes, active);
+                if (!nested) return std::nullopt;
+                if (straight_line_return) must_write |= *nested;
+                called = true;
+                continue;
+            }
+            if (!(insn.mnemonic == Mnemonic::Mov || insn.mnemonic == Mnemonic::Movzx ||
+                  insn.mnemonic == Mnemonic::Lea || insn.mnemonic == Mnemonic::Test ||
+                  insn.mnemonic == Mnemonic::Cmp || insn.mnemonic == Mnemonic::Inc ||
+                  insn.mnemonic == Mnemonic::Dec || insn.mnemonic == Mnemonic::Push ||
+                  insn.mnemonic == Mnemonic::Pop || insn.mnemonic == Mnemonic::Ret ||
+                  insn.mnemonic == Mnemonic::Nop || insn.mnemonic == Mnemonic::Endbr64 ||
+                  is_conditional_branch(insn.mnemonic) ||
+                  is_unconditional_jmp(insn.mnemonic))) return std::nullopt;
+            for (u8 i = 0; i < insn.num_operands; ++i) {
+                const auto& operand = insn.operands[i];
+                if (operand.kind == Operand::Kind::Register &&
+                    canonical_reg(operand.reg) == arg) return std::nullopt;
+                if (operand.kind != Operand::Kind::Memory ||
+                    (canonical_reg(operand.mem.base) != arg &&
+                     canonical_reg(operand.mem.index) != arg)) continue;
+                if (called || insn.mnemonic != Mnemonic::Mov || i != 0 ||
+                    operand.mem.segment != Reg::None ||
+                    canonical_reg(operand.mem.base) != arg ||
+                    operand.mem.index != Reg::None || operand.mem.disp < 0 ||
+                    operand.mem.size == 0 ||
+                    static_cast<u64>(operand.mem.disp) + operand.mem.size > bytes)
+                    return std::nullopt;
+                if (straight_line_return) {
+                    for (unsigned byte = 0; byte < operand.mem.size; ++byte)
+                        must_write |= 1u << (static_cast<unsigned>(operand.mem.disp) + byte);
+                }
+            }
+        }
+    }
+    return must_write;
+}
+
+[[nodiscard]] std::optional<unsigned>
+known_write_only_call_escape(const Binary& binary, const IrBlock& block,
+                             std::size_t index, u8 source, unsigned bytes) {
+    if (binary.format() != Format::Elf) return std::nullopt;
+    const auto& pack = block.insts[index];
+    constexpr std::array<Reg, 3> first{Reg::Rdi, Reg::Rsi, Reg::Rdx};
+    constexpr std::array<Reg, 3> second{Reg::Rcx, Reg::R8, Reg::R9};
+    Reg arg = Reg::None;
+    if (source < 3 && pack.name == "call.args.1") arg = first[source];
+    if (source < 3 && pack.name == "call.args.2") arg = second[source];
+    if (arg == Reg::None) return std::nullopt;
+    for (std::size_t i = index + 1; i < block.insts.size() && i <= index + 8; ++i) {
+        const auto& next = block.insts[i];
+        if (next.op == IrOp::Call && next.target1 != 0)
+            return callee_writes_only_to_arg(binary, next.target1, arg, bytes);
+        if (next.op != IrOp::Intrinsic || !next.name.starts_with("call.")) break;
+    }
+    return std::nullopt;
+}
+
 }  // namespace
 
 std::set<const IrInst*> find_x64_stack_reservations(const IrFunction& fn,
@@ -163,6 +276,15 @@ std::set<const IrInst*> find_x64_stack_reservations(const IrFunction& fn,
                         // Pseudo-C may describe the initialized subobject;
                         // strict exports cannot assume an unknown callee will
                         // never look backwards into the reservation's padding.
+                        if (!allow_subobject_escape && inst.op == IrOp::Intrinsic) {
+                            const auto written = known_write_only_call_escape(
+                                binary, block, ii, i,
+                                static_cast<unsigned>(*base + 8 - *offset));
+                            if (written) {
+                                initialized |= *written << static_cast<unsigned>(*offset - *base);
+                                continue;
+                            }
+                        }
                         const unsigned required = allow_subobject_escape ? mask(*offset, 8) : 0xffu;
                         safe &= (required & ~initialized) == 0;
                     }

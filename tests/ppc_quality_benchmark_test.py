@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
 import sys
 import tempfile
@@ -103,8 +104,9 @@ void second(void) {}\n
 [timing]   cfg_build: 0.750 ms
 """)
     assert timings == {"cfg_build": 2.0, "emit": 0.5}
-    assert benchmark.check_syntax("void ok(void) {}\n", "clang", 5.0) is None
-    assert benchmark.check_syntax("void broken( {\n", "clang", 5.0) is not None
+    compiler = os.environ.get("CC", "cc")
+    assert benchmark.check_syntax("void ok(void) {}\n", compiler, 5.0) is None
+    assert benchmark.check_syntax("void broken( {\n", compiler, 5.0) is not None
     return 0
 
 

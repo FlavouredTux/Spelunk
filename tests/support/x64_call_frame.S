@@ -71,6 +71,53 @@ begin reserve_full_word
     ret
 end reserve_full_word
 
+begin write_byte
+    movb $0x5a, (%rdi)
+    ret
+end write_byte
+
+begin reserve_byte
+    push %rax
+    movb $0, 7(%rsp)
+    lea 7(%rsp), %rdi
+    call write_byte
+    movzbl 7(%rsp), %eax
+    add $8, %rsp
+    ret
+end reserve_byte
+
+begin read_before_byte
+    movzbl -1(%rdi), %eax
+    ret
+end read_before_byte
+
+begin reserve_read_padding
+    push %rax
+    movb $0, 7(%rsp)
+    lea 7(%rsp), %rdi
+    call read_before_byte
+    add $8, %rsp
+    ret
+end reserve_read_padding
+
+begin maybe_write_byte
+    test %esi, %esi
+    je .Lmaybe_byte_done
+    movb $0x5a, (%rdi)
+.Lmaybe_byte_done:
+    ret
+end maybe_write_byte
+
+begin reserve_maybe_byte
+    mov %edi, %esi
+    push %rax
+    lea 7(%rsp), %rdi
+    call maybe_write_byte
+    movzbl 7(%rsp), %eax
+    add $8, %rsp
+    ret
+end reserve_maybe_byte
+
 begin capture_word
     mov (%rdi), %rax
     ret

@@ -37,12 +37,17 @@ with tempfile.TemporaryDirectory(prefix='spelunk-call-frame-') as tmp:
     rejected = subprocess.run([exe, '--no-cache', '--emit-c', '-s', 'reserve_marker', str(native)],
                               text=True, capture_output=True, timeout=30)
     assert rejected.returncode == 1 and not rejected.stdout, rejected
+    for name in ('reserve_read_padding', 'reserve_maybe_byte'):
+        rejected = subprocess.run([exe, '--no-cache', '--emit-c', '-s', name, str(native)],
+                                  text=True, capture_output=True, timeout=30)
+        assert rejected.returncode == 1 and not rejected.stdout, (name, rejected)
     for name in ('read_entry_push', 'partial_overwrite', 'escape_uninitialized', 'segment_store_is_not_frame'):
         pseudo = run([exe, '--no-cache', '-p', '-s', name, native])
         assert re.search(r'\brax\b', pseudo), (name, pseudo)
 
     generated = []
-    for name in ('capture_word', 'reserve_full_word', 'pushed_value'):
+    for name in ('capture_word', 'reserve_full_word', 'pushed_value',
+                 'write_byte', 'reserve_byte'):
         path = root / (name + '.c')
         path.write_text(run([exe, '--no-cache', '--emit-c', '-s', name, native]))
         generated.append(path)
@@ -60,3 +65,6 @@ with tempfile.TemporaryDirectory(prefix='spelunk-call-frame-') as tmp:
             for value in values:
                 results = [getattr(lib, name)(value) for lib in libs]
                 assert results == [value, value], (name, opt, value, results)
+        for lib in libs:
+            lib.reserve_byte.restype = ctypes.c_uint32
+        assert [lib.reserve_byte() for lib in libs] == [0x5a, 0x5a]

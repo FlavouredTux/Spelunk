@@ -52,7 +52,12 @@ namespace {
 }  // namespace
 
 void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
-               const std::unordered_set<addr_t>& known_entries) {
+               const std::unordered_set<addr_t>& known_entries,
+               addr_t owner_begin, addr_t owner_end) {
+    const auto is_other_entry = [&](addr_t target) {
+        return known_entries.contains(target) &&
+               !(target > owner_begin && target < owner_end);
+    };
     std::deque<addr_t> wl;
     wl.push_back(entry);
     ws.leaders.insert(entry);
@@ -112,7 +117,7 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
             }
             if (is_unconditional_jmp(mn)) {
                 if (auto t = branch_target(insn); t) {
-                    if (known_entries.contains(*t) ||
+                    if (is_other_entry(*t) ||
                         b.import_at_plt(*t) != nullptr) {
                         // Tail call: don't walk into the target; record the
                         // call for xrefs and mark this jmp so partition()
@@ -126,7 +131,7 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
                     }
                 } else if (auto ct = resolve_ppc_ctr_target(b, ws, ip); ct) {
                     ws.resolved_indirect[ip] = *ct;
-                    if (known_entries.contains(*ct) || b.import_at_plt(*ct) != nullptr) {
+                    if (is_other_entry(*ct) || b.import_at_plt(*ct) != nullptr) {
                         if (ws.call_seen.insert(*ct).second) {
                             ws.calls.push_back(*ct);
                         }

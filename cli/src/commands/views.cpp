@@ -311,6 +311,10 @@ int run_emit(const Args& args, const Binary& b) {
     // walks roughly the same set of functions IPA does, becomes nearly
     // free on top of the IPA pass.
     IrCache shared_ir_cache;
+    emit_opts.ir_cache = &shared_ir_cache;
+    if (!known_function_entries.empty()) {
+        shared_ir_cache.known_entries = known_function_entries;
+    }
     InferenceResult ipa;
     const bool project_ipa = !args.header_paths.empty() &&
         (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) &&
@@ -397,6 +401,15 @@ int run_emit(const Args& args, const Binary& b) {
             Result<std::string> output = win ? render_one(*win) :
                 Result<std::string>{std::unexpected(Error::invalid_format(
                     std::format("could not resolve function '{}'", view_symbols[i])))};
+            // A batch may visit thousands of distinct callees. Release old
+            // lifted IR between completed functions while retaining the
+            // discovered-entry set for later CFG builds.
+            constexpr std::size_t kMaxCachedCallees = 1024;
+            if (shared_ir_cache.by_addr.size() + shared_ir_cache.failed.size() >
+                kMaxCachedCallees) {
+                shared_ir_cache.by_addr.clear();
+                shared_ir_cache.failed.clear();
+            }
             if (!output) status = EXIT_FAILURE;
             if (args.json) {
                 const auto quote = [](std::string_view text) {

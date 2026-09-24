@@ -71,8 +71,7 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
     if (!binary || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return std::nullopt;
     if (auto it = fp_return_cache.find(target); it != fp_return_cache.end()) return it->second;
     auto& result = fp_return_cache[target];
-    IrCache cache;
-    const auto* callee = lift_cached(cache, *binary, target);
+    const auto* callee = lift_cached(callee_ir_cache(), *binary, target);
     if (!callee) return result;
     std::map<SsaKey, const IrInst*> definitions;
     for (const auto& block : callee->blocks) for (const auto& inst : block.insts) {

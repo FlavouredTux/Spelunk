@@ -12,6 +12,8 @@
 
 namespace spelunk {
 
+struct IrCache;
+
 // Sidecar provenance produced by the emitter. One Hit per IR
 // instruction whose statement was appended to the output buffer:
 // `byte_offset` is the start of the returned string's statement line
@@ -76,6 +78,9 @@ struct EmitOptions {
     // function list cached. This lets CFG building avoid reconstructing
     // the whole-binary function index for each interactive decompile.
     const std::unordered_set<addr_t>* known_function_entries = nullptr;
+    // Optional command/session cache shared by callee return and argument
+    // inference. Its lifetime must cover the emit call.
+    IrCache* ir_cache = nullptr;
     // Function entry VA → prologue end VA (from PE UNWIND_INFO via
     // build_prologue_ranges). When set, the emitter suppresses every IR
     // instruction whose source_addr lies in [entry, prologue_end), and

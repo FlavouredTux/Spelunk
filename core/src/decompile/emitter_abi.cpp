@@ -236,7 +236,7 @@ Emitter::cached_argument_layout(addr_t target) const {
         }
     }
     if (!declared && binary) {
-        layout = infer_arguments(*binary, target, abi);
+        layout = infer_arguments(*binary, target, abi, callee_ir_cache());
     }
     auto inserted = argument_layout_cache.emplace(key, std::move(layout));
     return inserted.first->second;

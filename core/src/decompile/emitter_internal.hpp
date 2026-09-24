@@ -12,11 +12,13 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include <spelunk/decompile/emitter.hpp>
 #include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/ir_cache.hpp>
 #include <spelunk/analysis/cfg_util.hpp>
 #include <spelunk/analysis/demangle.hpp>
 #include <spelunk/analysis/frame.hpp>
@@ -89,6 +91,10 @@ struct Emitter {
     BinaryStringLiterals                             string_literals;
     const Annotations*                               annotations = nullptr;
     EmitOptions                                      options{};
+    mutable IrCache                                 local_ir_cache;
+    [[nodiscard]] IrCache& callee_ir_cache() const noexcept {
+        return options.ir_cache ? *options.ir_cache : local_ir_cache;
+    }
     // Recovered stack-frame slots, populated once at the start of emit()
     // by compute_frame_layout(). The body's existing format_mem() path
     // will name these slots `local_<hex>` / `arg_<hex>` to match the
@@ -1001,8 +1007,17 @@ struct Emitter {
     // remaining cap still prevents cyclic or pathological expansion.
     static constexpr int kMaxExprDepth = 24;
 
+    // A single rendered expression may reach the same SSA value through many
+    // Phi operands. Keep its expansion results only for that root render:
+    // scoped names and other rendering state can change between statements.
+    using ExprMemoKey = std::tuple<SsaKey, IrType, int, int>;
+    mutable std::map<ExprMemoKey, std::string> expr_memo;
+    mutable unsigned expr_memo_nesting = 0;
+
     [[nodiscard]] std::string expr(const IrValue& v, int depth = 0,
                                    int min_prec = 0) const;
+    [[nodiscard]] std::string expr_uncached(const IrValue& v, int depth,
+                                            int min_prec) const;
     [[nodiscard]] std::string expand(const IrInst& d, int depth,
                                      int min_prec = 0) const;
     [[nodiscard]] std::string format_load_rhs(const IrInst& d,

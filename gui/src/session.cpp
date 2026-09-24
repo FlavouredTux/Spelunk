@@ -38,10 +38,7 @@ const DiscoveredFunction* Session::function_after(addr_t va) const noexcept {
 }
 
 std::optional<FuncWindow> Session::window_for(const DiscoveredFunction& fn) const {
-    if (auto w = resolve_function_at(*binary, fn.addr)) {
-        w->label = fn.name;
-        return w;
-    }
+    if (binary->bytes_at(fn.addr).empty()) return std::nullopt;
     return FuncWindow{fn.addr, fn.size, fn.name};
 }
 

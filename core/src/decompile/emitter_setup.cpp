@@ -237,7 +237,8 @@ SignatureContext setup_signature_context(Emitter& e,
                 e.self_arg_layout.push_back({regs[i], IrType::I64});
             }
         } else if (binary) {
-            e.self_arg_layout = infer_arguments(*binary, sf.ir->start, e.abi);
+            e.self_arg_layout = infer_arguments(
+                *binary, sf.ir->start, e.abi, e.callee_ir_cache());
         }
         e.self_arity = static_cast<u8>(std::min<std::size_t>(
             e.self_arg_layout.size(), kMaxAbiArgs));

@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <spelunk/common/types.hpp>
@@ -51,6 +52,8 @@ signals:
     void session_ready();
     // Fired when the background cross-reference pass has landed.
     void analysis_finished();
+    // The selected function's pseudocode is available in the view.
+    void pseudocode_ready();
 
 private:
     struct Rendered {
@@ -97,7 +100,9 @@ private:
     // views
     void     show_function(const DiscoveredFunction& fn);
     Rendered render_disassembly(const FuncWindow& w);
-    Rendered render_pseudocode(const FuncWindow& w);
+    static Rendered render_pseudocode(const Session& session,
+                                      const FuncWindow& w);
+    void request_pseudocode(const FuncWindow& w);
     CodeView* ensure_disassembly_tab();
     CodeView* ensure_pseudocode_tab();
     HexView* ensure_hex_tab();
@@ -116,6 +121,7 @@ private:
 
     std::unordered_map<addr_t, Rendered> disasm_cache_;
     std::unordered_map<addr_t, Rendered> pseudo_cache_;
+    std::unordered_set<addr_t> pseudo_pending_;
     std::optional<addr_t>                current_fn_;
     std::vector<addr_t>                  history_;
     std::size_t                          history_pos_ = 0;

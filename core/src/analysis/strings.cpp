@@ -1,10 +1,13 @@
 #include <spelunk/analysis/strings.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -15,6 +18,7 @@
 #include <spelunk/binary/section.hpp>
 #include <spelunk/binary/symbol.hpp>
 #include <spelunk/common/timing.hpp>
+#include <spelunk/common/threads.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/disasm/decoder.hpp>
 #include <spelunk/disasm/instruction.hpp>
@@ -133,11 +137,11 @@ scan_strings_impl(const Binary &b, const StringScanOptions &options,
     // *contains* the address - since lea/mov/call immediates always target the
     // string start, we only match exact starts (simpler and avoids false hits
     // into the middle of a string).
-    auto match = [&](addr_t a) -> StringEntry * {
+    auto match = [&](addr_t a) -> std::optional<std::size_t> {
         auto it = by_addr.find(a);
         if (it == by_addr.end())
-            return nullptr;
-        return &results[it->second];
+            return std::nullopt;
+        return it->second;
     };
 
     // String discovery itself (scan_section above) is arch-agnostic, so
@@ -198,13 +202,20 @@ scan_strings_impl(const Binary &b, const StringScanOptions &options,
         }
     }
 
-    X64Decoder dec;
-    {
-        ScopedTimer xref_timer("strings.scan_xrefs");
-        for (const auto &w : work) {
+    using StringRef = std::pair<std::size_t, addr_t>;
+    const std::size_t workers = work.size() < 512
+        ? 1 : std::min<std::size_t>(thread_pool_size(8), work.size());
+    std::vector<std::vector<StringRef>> refs_by_worker(workers);
+    std::atomic<std::size_t> next{0};
+    auto scan_work = [&](std::size_t worker) {
+        X64Decoder dec;
+        auto& refs = refs_by_worker[worker];
+        while (true) {
+            const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);
+            if (index >= work.size()) break;
+            const auto& w = work[index];
             auto span = b.bytes_at(w.addr);
-            if (span.empty())
-                continue;
+            if (span.empty()) continue;
             const std::size_t limit =
                 std::min<std::size_t>(span.size(), static_cast<std::size_t>(w.size));
 
@@ -228,7 +239,6 @@ scan_strings_impl(const Binary &b, const StringScanOptions &options,
                         candidate = op.rel.target;
                         have = true;
                     } else if (op.kind == Operand::Kind::Memory && op.mem.has_disp) {
-                        // rip-relative: disp is offset from next instruction.
                         if (op.mem.base == Reg::Rip && op.mem.index == Reg::None) {
                             candidate = ip + insn.length + static_cast<addr_t>(op.mem.disp);
                             have = true;
@@ -240,12 +250,9 @@ scan_strings_impl(const Binary &b, const StringScanOptions &options,
                         candidate = static_cast<addr_t>(op.imm.value);
                         have = true;
                     }
-                    if (!have)
-                        continue;
-                    if (auto *e = match(candidate)) {
-                        if (e->xrefs.empty() || e->xrefs.back() != ip) {
-                            e->xrefs.push_back(ip);
-                        }
+                    if (!have) continue;
+                    if (auto found = match(candidate)) {
+                        refs.emplace_back(*found, ip);
                     }
                 }
 
@@ -253,6 +260,23 @@ scan_strings_impl(const Binary &b, const StringScanOptions &options,
                 off += insn.length;
             }
         }
+    };
+    {
+        ScopedTimer xref_timer("strings.scan_xrefs");
+        if (workers == 1) {
+            scan_work(0);
+        } else {
+            std::vector<std::thread> threads;
+            threads.reserve(workers);
+            for (std::size_t i = 0; i < workers; ++i)
+                threads.emplace_back(scan_work, i);
+            for (auto& thread : threads) thread.join();
+        }
+    }
+
+    for (const auto& refs : refs_by_worker) {
+        for (const auto& [string_index, ip] : refs)
+            results[string_index].xrefs.push_back(ip);
     }
 
     // Dedupe xrefs.

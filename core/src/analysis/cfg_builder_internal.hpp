@@ -56,7 +56,8 @@ resolve_ppc_ctr_target(const Binary& binary, const WalkState& state,
                        addr_t branch_addr);
 
 void walk_from(const Binary& binary, const Decoder& decoder, WalkState& state,
-               addr_t entry, const std::unordered_set<addr_t>& known_entries);
+               addr_t entry, const std::unordered_set<addr_t>& known_entries,
+               addr_t owner_begin, addr_t owner_end);
 
 void partition(const Binary& binary, const WalkState& state, Function& function);
 

@@ -23,6 +23,27 @@
 namespace spelunk::emit {
 
 std::string Emitter::expr(const IrValue& v, int depth, int min_prec) const {
+    if (expr_memo_nesting == 0) expr_memo.clear();
+    ++expr_memo_nesting;
+    struct NestingGuard {
+        unsigned& nesting;
+        ~NestingGuard() { --nesting; }
+    } guard{expr_memo_nesting};
+
+    const auto key = ssa_key(v);
+    if (!key || v.kind == IrValueKind::Imm) {
+        return expr_uncached(v, depth, min_prec);
+    }
+    const ExprMemoKey memo_key{*key, v.type, depth, min_prec};
+    if (auto found = expr_memo.find(memo_key); found != expr_memo.end()) {
+        return found->second;
+    }
+    std::string result = expr_uncached(v, depth, min_prec);
+    expr_memo.emplace(memo_key, result);
+    return result;
+}
+
+std::string Emitter::expr_uncached(const IrValue& v, int depth, int min_prec) const {
     if (const auto* name = scoped_ssa_name(v)) return *name;
     if (options.c_source && is_float_type(v.type)) {
         const auto* definition = def_stripped(v);

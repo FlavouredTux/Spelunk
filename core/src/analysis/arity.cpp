@@ -42,7 +42,8 @@ namespace {
 [[nodiscard]] std::vector<InferredArgument>
 infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                                  const Binary& b, addr_t target, Abi abi,
-                                 unsigned depth) noexcept {
+                                 unsigned depth,
+                                 std::size_t& remaining_lifts) noexcept {
     // PPC call instructions do not encode arity, and the old x86-only
     // fallback consequently reported every Wii callee as taking zero
     // arguments.  Reuse the lifted SSA here: a version-zero ABI argument
@@ -54,8 +55,9 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
     // for a source-level void function.  Counting any of those would turn
     // nearly every PPC function into an eight-argument value-returning one.
     const bool uncached = !cache.by_addr.contains(target) && !cache.failed.contains(target);
-    if (depth > 4 || (uncached && cache.by_addr.size() + cache.failed.size() >= 64) ||
+    if (depth > 4 || (uncached && remaining_lifts == 0) ||
         !visiting.insert(target).second) return {};
+    if (uncached) --remaining_lifts;
     IrFunction* fn = lift_cached(cache, b, target);
     if (!fn) {
         visiting.erase(target);
@@ -274,7 +276,8 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
                     }
                     if (callee_layout.empty()) {
                         callee_layout = infer_ppc_arguments_from_ir_impl(
-                            cache, visiting, b, inst.target1, abi, depth + 1);
+                            cache, visiting, b, inst.target1, abi, depth + 1,
+                            remaining_lifts);
                     }
                     for (const auto& arg : callee_layout) {
                         const auto regs = is_ppc_fpr(arg.reg) ? fp_args : int_args;
@@ -432,10 +435,12 @@ infer_ppc_arguments_from_ir_impl(IrCache& cache, std::set<addr_t>& visiting,
 }
 
 [[nodiscard]] std::vector<InferredArgument>
-infer_ppc_arguments_from_ir(const Binary& b, addr_t target, Abi abi) noexcept {
-    IrCache cache;
+infer_ppc_arguments_from_ir(IrCache& cache, const Binary& b,
+                            addr_t target, Abi abi) noexcept {
     std::set<addr_t> visiting;
-    return infer_ppc_arguments_from_ir_impl(cache, visiting, b, target, abi, 0);
+    std::size_t remaining_lifts = 64;
+    return infer_ppc_arguments_from_ir_impl(
+        cache, visiting, b, target, abi, 0, remaining_lifts);
 }
 
 [[nodiscard]] bool is_rsp_adjust(const Instruction& insn, Mnemonic mn) noexcept {
@@ -542,8 +547,9 @@ enum class DstRole : u8 { WriteOnly, ReadWrite, ReadOnly };
 static u8 infer_arity_impl(const Binary& b, addr_t target, Abi abi,
                            unsigned depth, std::size_t& remaining) noexcept {
     if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
+        IrCache cache;
         return static_cast<u8>(std::min<std::size_t>(
-            infer_ppc_arguments_from_ir(b, target, abi).size(),
+            infer_ppc_arguments_from_ir(cache, b, target, abi).size(),
             std::numeric_limits<u8>::max()));
     }
     if (b.arch() != Arch::X86_64) return 0;
@@ -818,9 +824,10 @@ void extend_x64_fp_arguments(const IrFunction& fn, Abi abi,
 }
 
 std::vector<InferredArgument>
-infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept {
+infer_arguments(const Binary& b, addr_t target, Abi abi,
+                IrCache& cache) noexcept {
     if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
-        return infer_ppc_arguments_from_ir(b, target, abi);
+        return infer_ppc_arguments_from_ir(cache, b, target, abi);
     }
     const auto regs = int_arg_regs(abi);
     const std::size_t count = std::min<std::size_t>(infer_arity(b, target, abi),
@@ -830,12 +837,17 @@ infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept {
     const IrType type = (b.arch() == Arch::Arm) ? IrType::I32 : IrType::I64;
     for (std::size_t i = 0; i < count; ++i) result.push_back({regs[i], type});
     if (b.arch() == Arch::X86_64) {
-        IrCache cache;
         if (auto* function = lift_cached(cache, b, target)) {
             extend_x64_fp_arguments(*function, abi, result);
         }
     }
     return result;
+}
+
+std::vector<InferredArgument>
+infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept {
+    IrCache cache;
+    return infer_arguments(b, target, abi, cache);
 }
 
 std::vector<InferredArgument>

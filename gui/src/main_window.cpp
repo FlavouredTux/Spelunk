@@ -488,6 +488,7 @@ void MainWindow::close_session() {
     band_->set_session(nullptr);
     disasm_cache_.clear();
     pseudo_cache_.clear();
+    pseudo_pending_.clear();
     history_.clear();
     history_pos_ = 0;
     current_fn_.reset();
@@ -688,10 +689,11 @@ MainWindow::Rendered MainWindow::render_disassembly(const FuncWindow& w) {
     return out;
 }
 
-MainWindow::Rendered MainWindow::render_pseudocode(const FuncWindow& w) {
+MainWindow::Rendered MainWindow::render_pseudocode(const Session& session,
+                                                   const FuncWindow& w) {
     Rendered out;
     LineMap  map;
-    auto r = session_->pseudocode(w, &map);
+    auto r = session.pseudocode(w, &map);
     if (!r) {
         out.text = QStringLiteral("// %1").arg(QString::fromStdString(r.error().message));
         out.lines.push_back(0);
@@ -715,6 +717,35 @@ MainWindow::Rendered MainWindow::render_pseudocode(const FuncWindow& w) {
     }
     out.text = QString::fromStdString(text);
     return out;
+}
+
+void MainWindow::request_pseudocode(const FuncWindow& w) {
+    if (!pseudo_ || !session_) return;
+    if (auto cached = pseudo_cache_.find(w.start); cached != pseudo_cache_.end()) {
+        pseudo_->set_content(cached->second.text, cached->second.lines);
+        emit pseudocode_ready();
+        return;
+    }
+    pseudo_->set_content(QStringLiteral("// Analyzing pseudocode..."), {0});
+    if (!pseudo_pending_.insert(w.start).second) return;
+
+    const std::shared_ptr<Session> session = session_;
+    spawn([this, session, w] {
+        Rendered rendered = render_pseudocode(*session, w);
+        QMetaObject::invokeMethod(this,
+            [this, session, addr = w.start, rendered = std::move(rendered)]() mutable {
+                if (session_ != session) return;
+                pseudo_pending_.erase(addr);
+                auto [it, _] = pseudo_cache_.insert_or_assign(addr, std::move(rendered));
+                if (pseudo_ && current_fn_ && *current_fn_ == addr) {
+                    const auto va = disasm_ ? disasm_->current_line_address()
+                                            : std::nullopt;
+                    pseudo_->set_content(it->second.text, it->second.lines);
+                    if (va) pseudo_->go_to_address(*va);
+                    emit pseudocode_ready();
+                }
+            }, Qt::QueuedConnection);
+    });
 }
 
 CodeView* MainWindow::ensure_disassembly_tab() {
@@ -772,17 +803,7 @@ void MainWindow::show_function(const DiscoveredFunction& fn) {
     }
 
     if (pseudo_) {
-        QApplication::setOverrideCursor(Qt::WaitCursor);
-        auto pit = pseudo_cache_.find(fn.addr);
-        if (pit == pseudo_cache_.end()) {
-            ScopedTimer t("gui.render_pseudo");
-            pit = pseudo_cache_.emplace(fn.addr, render_pseudocode(*win)).first;
-        }
-        {
-            ScopedTimer t("gui.set_content_pseudo");
-            pseudo_->set_content(pit->second.text, pit->second.lines);
-        }
-        QApplication::restoreOverrideCursor();
+        request_pseudocode(*win);
     }
 }
 
@@ -793,12 +814,7 @@ void MainWindow::open_pseudocode() {
     if (fresh) {
         if (const auto* fn = session_->function_at(*current_fn_)) {
             if (auto win = session_->window_for(*fn)) {
-                QApplication::setOverrideCursor(Qt::WaitCursor);
-                auto pit = pseudo_cache_.find(fn->addr);
-                if (pit == pseudo_cache_.end())
-                    pit = pseudo_cache_.emplace(fn->addr, render_pseudocode(*win)).first;
-                p->set_content(pit->second.text, pit->second.lines);
-                QApplication::restoreOverrideCursor();
+                request_pseudocode(*win);
             }
         }
     }

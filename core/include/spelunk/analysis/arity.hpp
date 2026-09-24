@@ -13,6 +13,8 @@
 
 namespace spelunk {
 
+struct IrCache;
+
 // One source-level register argument recovered from the callee body. PPC uses
 // independent GPR and FPR sequences, so a scalar arity cannot describe a
 // mixed signature or tell a call site how to interleave the two banks.
@@ -57,6 +59,10 @@ void extend_x64_fp_arguments(const IrFunction& fn, Abi abi,
 // return the inferred integer-register prefix; x86-64 adds scalar XMM lanes.
 [[nodiscard]] std::vector<InferredArgument>
 infer_arguments(const Binary& b, addr_t target, Abi abi) noexcept;
+
+// Reuse lifted callees when several argument/return queries share a binary.
+[[nodiscard]] std::vector<InferredArgument>
+infer_arguments(const Binary& b, addr_t target, Abi abi, IrCache& cache) noexcept;
 
 [[nodiscard]] std::vector<InferredArgument>
 infer_arguments(const Binary& b, addr_t target) noexcept;

@@ -10,6 +10,7 @@
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -133,6 +134,20 @@ void collect_address_taken_functions(Emitter& e, const std::string& body,
 [[nodiscard]] std::map<u32, FallbackMaterialization>
 fallback_materializations(const Emitter& e, const std::string& body) {
     std::map<u32, FallbackMaterialization> out;
+    // The old per-definition identifier query rescanned the complete body
+    // for every SSA temporary. Mask comments/literals once and index tokens
+    // before asking which definitions need a fallback declaration.
+    const std::string code = code_only_text(body);
+    std::unordered_set<std::string_view> identifiers;
+    for (std::size_t pos = 0; pos < code.size();) {
+        if (!c_ident_char(code[pos])) {
+            ++pos;
+            continue;
+        }
+        const std::size_t begin = pos;
+        do { ++pos; } while (pos < code.size() && c_ident_char(code[pos]));
+        identifiers.insert(std::string_view(code).substr(begin, pos - begin));
+    }
     const auto contains_raw_temp = [](std::string_view text) {
         for (std::size_t i = 0; i + 1 < text.size(); ++i) {
             if (text[i] != 't' ||
@@ -148,7 +163,7 @@ fallback_materializations(const Emitter& e, const std::string& body) {
     e.ssa_uses.for_each_definition([&](const SsaKey&, const IrInst* definition) {
         if (!definition || definition->dst.kind != IrValueKind::Temp) return;
         const std::string name = std::format("t{}", definition->dst.temp);
-        if (!text_contains_identifier_in_code(body, name) ||
+        if (!identifiers.contains(std::string_view(name)) ||
             text_declares_identifier(body, name)) return;
         std::string initializer;
         if (auto key = ssa_key(definition->dst);

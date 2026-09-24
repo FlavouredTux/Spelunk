@@ -44,12 +44,21 @@ int main(int argc, char** argv) {
         const bool want_hex = parser.isSet(hex);
         QObject::connect(&window, &spelunk::gui::MainWindow::analysis_finished, &window,
                           [&window, out, want_pseudo, want_hex] {
+            const auto save = [&window, out] {
+                QTimer::singleShot(250, &window, [&window, out] {
+                    const bool ok = window.grab().save(out);
+                    QApplication::exit(ok ? 0 : 2);
+                });
+            };
+            if (want_pseudo && !want_hex) {
+                QObject::connect(&window, &spelunk::gui::MainWindow::pseudocode_ready,
+                                 &window, save, Qt::SingleShotConnection);
+                window.open_pseudocode_for_test();
+                return;
+            }
             if (want_pseudo) window.open_pseudocode_for_test();
             if (want_hex) window.open_hex_for_test();
-            QTimer::singleShot(250, &window, [&window, out] {
-                const bool ok = window.grab().save(out);
-                QApplication::exit(ok ? 0 : 2);
-            });
+            save();
         });
     }
 

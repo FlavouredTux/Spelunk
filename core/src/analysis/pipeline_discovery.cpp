@@ -702,6 +702,12 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         if ((fde.pc_begin == 0 && !b.is_relocatable_object()) || fde.pc_range == 0) return;
         if (!in_scope(fde.pc_begin)) return;
         if (b.import_at_plt(fde.pc_begin) != nullptr) return;
+        // Linkers give the whole PLT one FDE so unwinding works through the
+        // stubs; that range is import thunks, not a function.
+        for (const auto& sec : b.sections()) {
+            if (fde.pc_begin >= sec.vaddr && fde.pc_begin < sec.vaddr + sec.size &&
+                sec.name.starts_with(".plt")) return;
+        }
         if (auto existing = index.find(fde.pc_begin); existing != index.end()) {
             auto& function = out[existing->second];
             if (function.size == 0) function.size = fde.pc_range;
@@ -713,17 +719,12 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
                        DiscoveredFunction::Kind::Sub});
         ++unwind_added;
     };
-    if (unwind_extents.size() >= kDenseFdeThreshold) {
-        for (const auto& fde : unwind_extents) {
-            add_unwind_extent(fde);
-        }
-    } else {
-        // Compact-unwind entries are linker-authored function starts, not
-        // byte-pattern guesses. Even small Mach-O binaries can rely on them
-        // when LC_FUNCTION_STARTS is stripped or sparse.
-        for (const auto& fde : compact_unwind_extents) {
-            add_unwind_extent(fde);
-        }
+    // FDEs and compact-unwind entries are compiler/linker-authored starts
+    // with exact extents, at any density. A stripped `ls` has a few hundred
+    // FDEs; ignoring them let the prologue sweep split `main` at a mid-body
+    // `push rbx`. Density only decides whether that sweep still runs.
+    for (const auto& fde : unwind_extents) {
+        add_unwind_extent(fde);
     }
 
     // Two address-level gates filter the noise from later passes:
@@ -908,9 +909,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     if (mode == EnumerateMode::Cheap ||
         dense_authoritative_starts ||
         (mode == EnumerateMode::Auto && binary_looks_packed(b))) {
-        if (unwind_extents.size() >= kDenseFdeThreshold) {
-            filter_entries_inside_unwind_extents(out, unwind_extents);
-        }
+        filter_entries_inside_unwind_extents(out, unwind_extents);
         filter_shadowed_entries(out, b);
         filter_entries_inside_sized_symbols(out);
         fill_unknown_sizes(out, b);
@@ -924,9 +923,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
         add_candidate(e.callee, "sub");
     }
 
-    if (unwind_extents.size() >= kDenseFdeThreshold) {
-        filter_entries_inside_unwind_extents(out, unwind_extents);
-    }
+    filter_entries_inside_unwind_extents(out, unwind_extents);
     filter_shadowed_entries(out, b);
     filter_entries_inside_sized_symbols(out);
     fill_unknown_sizes(out, b);

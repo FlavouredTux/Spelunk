@@ -587,6 +587,66 @@ discover_objc_stack_block_invokes_impl(const Binary& b) {
 
 }  // namespace
 
+// glibc's crt1 `_start` passes `main` to `__libc_start_main` in rdi:
+//   lea rdi, [rip+main]   (PIE)      mov edi, main   (non-PIE)
+//   mov rdi, [rip+got]    (-fno-plt / GOT-indirect)
+// Decode the entry up to its first call and return what rdi holds there.
+// When the callee is visibly an import it must be __libc_start_main;
+// a static binary calls its own copy, which carries no name to check.
+std::optional<addr_t> main_from_libc_start(const Binary& b, addr_t entry) {
+    if (b.arch() != Arch::X86_64 || b.format() != Format::Elf) return std::nullopt;
+    auto dec = make_decoder(b);
+    if (!dec) return std::nullopt;
+    std::optional<addr_t> rdi;
+    addr_t pc = entry;
+    for (int n = 0; n < 48; ++n) {
+        auto bytes = b.bytes_at(pc);
+        if (bytes.empty()) return std::nullopt;
+        auto insn = (*dec)->decode(bytes, pc);
+        if (!insn || insn->length == 0) return std::nullopt;
+        const addr_t next = pc + insn->length;
+        const auto& dst = insn->operands[0];
+        const auto& src = insn->operands[1];
+        const auto rip_target = [&](const Operand& op) -> std::optional<addr_t> {
+            if (op.kind != Operand::Kind::Memory || op.mem.base != Reg::Rip ||
+                op.mem.index != Reg::None) return std::nullopt;
+            return next + static_cast<addr_t>(op.mem.disp);
+        };
+        if (insn->mnemonic == Mnemonic::Call) {
+            const Symbol* callee = nullptr;
+            if (dst.kind == Operand::Kind::Relative) callee = b.import_at_plt(dst.rel.target);
+            else if (auto slot = rip_target(dst)) callee = b.import_at_got(*slot);
+            if (callee && callee->name.find("__libc_start_main") == std::string::npos)
+                return std::nullopt;
+            if (!rdi || !addr_in_code_section(b, *rdi)) return std::nullopt;
+            return rdi;
+        }
+        if (insn->mnemonic == Mnemonic::Jmp || insn->mnemonic == Mnemonic::Ret ||
+            insn->mnemonic == Mnemonic::Hlt) return std::nullopt;
+        const bool writes_rdi = insn->num_operands >= 1 && dst.kind == Operand::Kind::Register &&
+                                canonical_reg(dst.reg) == Reg::Rdi;
+        if (writes_rdi) {
+            rdi.reset();
+            if (insn->mnemonic == Mnemonic::Lea) {
+                rdi = rip_target(src);
+            } else if (insn->mnemonic == Mnemonic::Mov && src.kind == Operand::Kind::Immediate) {
+                rdi = static_cast<addr_t>(src.imm.value);
+            } else if (insn->mnemonic == Mnemonic::Mov) {
+                if (auto slot = rip_target(src)) {
+                    const auto cell = b.bytes_at(*slot);
+                    if (cell.size() >= 8) {
+                        u64 v = 0;
+                        std::memcpy(&v, cell.data(), sizeof v);
+                        rdi = static_cast<addr_t>(v);
+                    }
+                }
+            }
+        }
+        pc = next;
+    }
+    return std::nullopt;
+}
+
 }  // namespace spelunk::pipeline
 
 namespace spelunk {
@@ -794,6 +854,26 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
             add_candidate(blk.invoke, "sub", true, &blk.name);
         }
     }
+    // The entry point is a function even when nothing calls it, and on a
+    // stripped glibc binary it is how `main` is found.
+    if (const addr_t entry = b.entry_point(); entry != 0 && addr_in_code_section(b, entry)) {
+        const std::string start_name = b.format() == Format::Elf ? "_start" : "start";
+        // A loader-made symbol at the entry keeps its name; the emitter
+        // reads symbols directly, and the two must agree.
+        const auto existing = index.find(entry);
+        if (existing == index.end() || out[existing->second].kind != DiscoveredFunction::Kind::Symbol)
+            add_candidate(entry, "sub", true, &start_name);
+        const bool has_main = std::ranges::any_of(out, [](const DiscoveredFunction& f) {
+            return f.name == "main";
+        });
+        if (!has_main) {
+            if (auto main_addr = main_from_libc_start(b, entry)) {
+                const std::string main_name = "main";
+                add_candidate(*main_addr, "sub", true, &main_name);
+            }
+        }
+    }
+
     const std::size_t before_prologues = out.size();
     if (unwind_extents.size() < kDenseFdeThreshold) {
         for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");

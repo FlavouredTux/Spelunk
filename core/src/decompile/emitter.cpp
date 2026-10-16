@@ -398,6 +398,11 @@ header_display_name(const Emitter& e, const StructuredFunction& sf,
             return pretty_symbol_base(s.name);
         }
     }
+    // Names discovery recovered without a symbol (`main` found through
+    // `_start`, the entry point's `_start` / `start`).
+    if (const std::string& label = sf.ir->name;
+        label == "main" || label == "_start" || label == "start")
+        return label;
     return std::format("sub_{:x}", sf.ir->start);
 }
 

@@ -295,7 +295,9 @@ resolve_function(const Binary& b, std::string_view symbol,
         }
     }
 
-    if (!symbol.empty()) {
+    // Discovered names include `main` recovered from `_start` on stripped
+    // binaries, so the default lookup goes through here as well.
+    {
         std::vector<DiscoveredFunction> hits;
         for (const auto& fn : enumerate_functions(b, EnumerateMode::Cheap)) {
             if (fn.name == lookup) hits.push_back(fn);

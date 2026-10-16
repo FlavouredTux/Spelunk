@@ -493,6 +493,7 @@ spelunk_build_fixture(canary PROTECTOR "-fstack-protector-strong")
 spelunk_build_fixture(noreturn_import)
 spelunk_build_fixture(assert_name OPT "-O0")
 spelunk_build_stripped_fixture(assert_name_stripped assert_name)
+spelunk_build_stripped_fixture(pointer_walk_stripped pointer_walk)
 spelunk_build_fixture(mangled_string_name OPT "-O0")
 spelunk_build_stripped_fixture(mangled_string_name_stripped mangled_string_name)
 spelunk_build_fixture(surface_inventory OPT "-O0")
@@ -1204,6 +1205,20 @@ spelunk_golden_test(
     FIXTURE pointer_walk
     ARGS    "-p|-s|main"
     GOLDEN  pointer_walk.main.pseudo.txt
+)
+# Stripped: the entry point is seeded as `_start`, and `main` is recovered
+# from the first argument `_start` passes to __libc_start_main.
+spelunk_golden_test(
+    NAME    pointer_walk_stripped_functions
+    FIXTURE pointer_walk_stripped
+    ARGS    "--functions"
+    GOLDEN  pointer_walk_stripped.functions.txt
+)
+spelunk_golden_test(
+    NAME    pointer_walk_stripped_default_pseudo
+    FIXTURE pointer_walk_stripped
+    ARGS    "-p"
+    GOLDEN  pointer_walk_stripped.default.pseudo.txt
 )
 
 # Stack-canary prologue+check suppression (-fstack-protector-strong).

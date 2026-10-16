@@ -1,0 +1,16 @@
+// main
+int main(uint32_t a1) {
+  uint32_t local_28;
+  uint64_t local_24;
+  uint32_t local_1c;
+  uint32_t local_18;
+  uint32_t local_14;
+  uint64_t local_10;
+  local_18 = a1;
+  local_24 = 0;
+  local_1c = 0;
+  local_28 = 2;
+  local_14 = 0;
+  local_10 = &local_28;
+  return sub_401180(&local_18);
+}

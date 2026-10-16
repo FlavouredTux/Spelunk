@@ -1,7 +1,9 @@
 #include <QApplication>
+#include <QPalette>
 #include <QCommandLineParser>
 #include <QStyle>
 #include <QStyleFactory>
+#include <QStyleHints>
 #include <QTimer>
 
 #include "main_window.hpp"
@@ -32,8 +34,29 @@ int main(int argc, char** argv) {
 
     // Fusion with its stock light palette is the closest built-in match
     // for the Qt look IDA and Binary Ninja ship with.
+    // IDA's default scheme is light; follow it even on a dark desktop so
+    // the chrome matches the white listing.
+    QApplication::styleHints()->setColorScheme(Qt::ColorScheme::Light);
     app.setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
-    app.setPalette(app.style()->standardPalette());
+    // Explicit light palette: Fusion's standard palette follows the
+    // desktop scheme, which left dark chrome around a white listing.
+    QPalette light;
+    light.setColor(QPalette::Window, QColor(0xf0, 0xf0, 0xf0));
+    light.setColor(QPalette::WindowText, Qt::black);
+    light.setColor(QPalette::Base, Qt::white);
+    light.setColor(QPalette::AlternateBase, QColor(0xf5, 0xf5, 0xf5));
+    light.setColor(QPalette::Text, Qt::black);
+    light.setColor(QPalette::Button, QColor(0xf0, 0xf0, 0xf0));
+    light.setColor(QPalette::ButtonText, Qt::black);
+    light.setColor(QPalette::ToolTipBase, QColor(0xff, 0xff, 0xe1));
+    light.setColor(QPalette::ToolTipText, Qt::black);
+    light.setColor(QPalette::PlaceholderText, QColor(0x80, 0x80, 0x80));
+    light.setColor(QPalette::Highlight, QColor(0x33, 0x99, 0xff));
+    light.setColor(QPalette::HighlightedText, Qt::white);
+    light.setColor(QPalette::Disabled, QPalette::Text, QColor(0x80, 0x80, 0x80));
+    light.setColor(QPalette::Disabled, QPalette::WindowText, QColor(0x80, 0x80, 0x80));
+    light.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(0x80, 0x80, 0x80));
+    app.setPalette(light);
 
     spelunk::gui::MainWindow window;
     window.show();

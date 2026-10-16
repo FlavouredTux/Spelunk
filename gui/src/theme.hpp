@@ -13,6 +13,7 @@ namespace spelunk::gui::theme {
 inline const QColor kViewBackground {0xff, 0xff, 0xff};
 inline const QColor kViewText       {0x00, 0x00, 0x00};
 inline const QColor kCurrentLine    {0xff, 0xff, 0xdc};
+inline const QColor kTokenHighlight {0xff, 0xff, 0x00};   // every occurrence of the word under the cursor
 inline const QColor kPrefix         {0x5f, 0x5f, 0x8f};   // .text:0000000000401000
 inline const QColor kBytes          {0x9a, 0x9a, 0x9a};   // opcode bytes column
 inline const QColor kMnemonic       {0x00, 0x00, 0x80};

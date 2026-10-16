@@ -15,8 +15,8 @@ void FunctionModel::set_session(const Session* s) {
             rows_.push_back(Row{
                 QString::fromStdString(display_name(f.name)),
                 QString::fromStdString(s->segment_name(f.addr)),
-                QString("%1").arg(f.addr, 16, 16, QChar('0')),
-                QString("%1").arg(f.size, 8, 16, QChar('0')),
+                QString("%1").arg(f.addr, 16, 16, QChar('0')).toUpper(),
+                QString("%1").arg(f.size, 8, 16, QChar('0')).toUpper(),
                 f.addr,
             });
         }

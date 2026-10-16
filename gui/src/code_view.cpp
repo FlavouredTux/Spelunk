@@ -74,6 +74,12 @@ void CodeView::keyPressEvent(QKeyEvent* e) {
         case Qt::Key_Escape:
             emit back_requested();
             return;
+        case Qt::Key_Tab:
+            if (e->modifiers() == Qt::NoModifier) {
+                emit toggle_view_requested();
+                return;
+            }
+            break;
         default:
             break;
     }
@@ -86,13 +92,40 @@ void CodeView::mouseDoubleClickEvent(QMouseEvent* e) {
         emit jump_requested(tok);
 }
 
+bool CodeView::find_next(const QString& needle) {
+    if (needle.isEmpty()) return false;
+    const QTextCursor found = document()->find(needle, textCursor());
+    if (found.isNull()) return false;
+    QTextCursor c = found;
+    c.setPosition(found.selectionStart());
+    setTextCursor(c);
+    centerCursor();
+    return true;
+}
+
 void CodeView::on_cursor_moved() {
-    QTextEdit::ExtraSelection sel;
-    sel.format.setBackground(theme::kCurrentLine);
-    sel.format.setProperty(QTextFormat::FullWidthSelection, true);
-    sel.cursor = textCursor();
-    sel.cursor.clearSelection();
-    setExtraSelections({sel});
+    QList<QTextEdit::ExtraSelection> selections;
+    QTextEdit::ExtraSelection line;
+    line.format.setBackground(theme::kCurrentLine);
+    line.format.setProperty(QTextFormat::FullWidthSelection, true);
+    line.cursor = textCursor();
+    line.cursor.clearSelection();
+    selections.push_back(line);
+
+    // IDA highlights every occurrence of the word under the cursor.
+    if (const QString tok = token_at(textCursor()); !tok.isEmpty()) {
+        const auto flags = QTextDocument::FindCaseSensitively | QTextDocument::FindWholeWords;
+        QTextCursor at(document());
+        for (int n = 0; n < 1000; ++n) {
+            at = document()->find(tok, at, flags);
+            if (at.isNull()) break;
+            QTextEdit::ExtraSelection hit;
+            hit.format.setBackground(theme::kTokenHighlight);
+            hit.cursor = at;
+            selections.push_back(hit);
+        }
+    }
+    setExtraSelections(selections);
 
     if (auto a = current_line_address()) emit line_address_changed(*a);
 }

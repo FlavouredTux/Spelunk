@@ -3,6 +3,7 @@
 #include <QMainWindow>
 #include <QString>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -63,6 +64,7 @@ private:
 
     // construction
     void build_actions();
+    [[nodiscard]] std::vector<QAction*> session_actions() const;
     void build_menus();
     void build_toolbars();
     void build_docks();
@@ -90,8 +92,11 @@ private:
     void jump_back();
     void jump_forward();
     void prompt_jump_address();
-    void prompt_jump_function();
+    void choose_function();
+    void choose_name();
     void jump_to_entry();
+    void mark_position();
+    void choose_mark();
     void push_history(addr_t va);
     void update_history_actions();
     void sync_chrome(addr_t va);
@@ -112,13 +117,43 @@ private:
     void      open_imports();
     void      open_exports();
     void      open_segments();
+    void      open_names();
     void      open_table_tab(const QString& title, QStandardItemModel* model);
     void      on_tab_close(int index);
+
+    // IDA editing / analysis commands
+    void rename_at_cursor();
+    void comment_at_cursor();
+    void show_xrefs(bool current_item);
+    void toggle_view();
+    void toggle_number();
+    void search_text(bool prompt);
+    void search_bytes(bool prompt);
+    void save_database();
+    void focus_filter();
+
+    CodeView* current_code_view() const;
+    // Address named by an identifier or literal, if it denotes one.
+    [[nodiscard]] std::optional<addr_t> resolve_token(const QString& token) const;
+    [[nodiscard]] const std::string* raw_disassembly(addr_t fn);
+    [[nodiscard]] QStandardItemModel* names_model();
+    Rendered decorate_pseudocode(const Rendered& raw) const;
+    void apply_number_toggles(QString& text, addr_t va) const;
+    // Re-render the open views after a rename, comment or display toggle,
+    // keeping cursor and scroll where they are.
+    void refresh_views(bool names_changed);
 
     std::shared_ptr<Session> session_;
     std::vector<QThread*>    workers_;
     bool                     loading_ = false;
 
+    std::unordered_map<addr_t, std::string> disasm_raw_;
+    // H: per line address, literal as rendered -> literal shown instead.
+    std::map<addr_t, std::map<QString, QString>> number_toggles_;
+    std::vector<std::pair<addr_t, QString>> marks_;
+    QString          last_text_search_;
+    std::vector<int> last_byte_search_;   // -1 = wildcard
+    bool             show_opcodes_ = false;
     std::unordered_map<addr_t, Rendered> disasm_cache_;
     std::unordered_map<addr_t, Rendered> pseudo_cache_;
     std::unordered_set<addr_t> pseudo_pending_;
@@ -159,6 +194,26 @@ private:
     QAction* act_exports_   = nullptr;
     QAction* act_segments_  = nullptr;
     QAction* act_about_     = nullptr;
+    QAction* act_names_     = nullptr;
+    QAction* act_names_window_ = nullptr;
+    QAction* act_mark_      = nullptr;
+    QAction* act_jump_mark_ = nullptr;
+    QAction* act_rename_    = nullptr;
+    QAction* act_comment_   = nullptr;
+    QAction* act_comment_alt_ = nullptr;
+    QAction* act_comment_pseudo_ = nullptr;
+    QAction* act_xrefs_     = nullptr;
+    QAction* act_xrefs_item_ = nullptr;
+    QAction* act_toggle_view_ = nullptr;
+    QAction* act_number_    = nullptr;
+    QAction* act_search_text_ = nullptr;
+    QAction* act_search_text_next_ = nullptr;
+    QAction* act_search_bytes_ = nullptr;
+    QAction* act_search_bytes_next_ = nullptr;
+    QAction* act_save_      = nullptr;
+    QAction* act_graph_     = nullptr;
+    QAction* act_opcodes_   = nullptr;
+    QAction* act_filter_    = nullptr;
 };
 
 }  // namespace spelunk::gui

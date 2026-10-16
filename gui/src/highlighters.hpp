@@ -7,9 +7,11 @@
 
 namespace spelunk::gui {
 
-// Colours spelunk's `format_disasm` lines after the view has rewritten the
-// `0x<va>` prefix into IDA's `<segment>:<va>` form:
-//   .text:0000000000001169  48 85 f6      test rsi, rsi  ; comment
+// Colours the IDA-style listing MainWindow renders:
+//   .text:0000000000001169 sub_1169        proc near   ; CODE XREF: ...
+//   .text:0000000000001169 48 85 F6                        test    rsi, rsi  ; comment
+//   .text:0000000000001180 loc_1180:
+//   .text:0000000000001190 sub_1169        endp
 class AsmHighlighter : public QSyntaxHighlighter {
     Q_OBJECT
 public:
@@ -17,8 +19,8 @@ public:
 protected:
     void highlightBlock(const QString& text) override;
 private:
-    QTextCharFormat prefix_, bytes_, mnemonic_, reg_, number_, name_, comment_;
-    QRegularExpression line_re_, reg_re_, number_re_, name_re_;
+    QTextCharFormat prefix_, bytes_, mnemonic_, reg_, number_, name_, comment_, keyword_;
+    QRegularExpression prefix_re_, insn_re_, label_re_, reg_re_, number_re_, name_re_;
 };
 
 // Colours the pseudo-C emitter's output the way Hex-Rays does: keywords

@@ -27,6 +27,12 @@ struct Session {
     std::filesystem::path           path;
     std::unique_ptr<Binary>         binary;
     Annotations                    annotations;
+    // Where renames and comments are written back (the sidecar when one
+    // exists next to the binary, the per-user cache otherwise).
+    std::filesystem::path          annotations_path;
+    // Names from analysis, before user renames, so an empty rename can
+    // restore them.
+    std::unordered_map<addr_t, std::string> original_names;
     std::vector<DiscoveredFunction> functions;   // sorted by addr
     std::unordered_set<addr_t>      entries;     // every functions[i].addr
 
@@ -56,6 +62,12 @@ struct Session {
     [[nodiscard]] Result<std::string> disassembly(const FuncWindow& w) const;
     [[nodiscard]] Result<std::string> pseudocode(const FuncWindow& w, LineMap* map) const;
     [[nodiscard]] const std::vector<StringEntry>& string_table();
+
+    // User rename; an empty name restores the analysis name.
+    void rename(addr_t va, const std::string& name);
+    // Name to show for `va`: user rename, else function name, else empty.
+    [[nodiscard]] std::string name_at(addr_t va) const;
+    [[nodiscard]] Result<void> save_annotations() const;
 };
 
 [[nodiscard]] Result<std::unique_ptr<Session>>

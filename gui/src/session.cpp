@@ -64,6 +64,31 @@ Result<std::string> Session::pseudocode(const FuncWindow& w, LineMap* map) const
     return format_struct(*binary, w, /*pseudo=*/true, &annotations, opts);
 }
 
+void Session::rename(addr_t va, const std::string& name) {
+    if (name.empty()) annotations.renames.erase(va);
+    else annotations.renames[va] = name;
+    for (auto& f : functions) {
+        if (f.addr != va) continue;
+        if (!name.empty()) f.name = name;
+        else if (auto it = original_names.find(va); it != original_names.end()) f.name = it->second;
+    }
+}
+
+std::string Session::name_at(addr_t va) const {
+    if (const auto* n = annotations.name_for(va)) return *n;
+    auto it = std::lower_bound(functions.begin(), functions.end(), va,
+        [](const DiscoveredFunction& f, addr_t v) { return f.addr < v; });
+    if (it != functions.end() && it->addr == va) return display_name(it->name);
+    return {};
+}
+
+Result<void> Session::save_annotations() const {
+    std::error_code ec;
+    if (annotations_path.has_parent_path())
+        std::filesystem::create_directories(annotations_path.parent_path(), ec);
+    return annotations.save(annotations_path);
+}
+
 const std::vector<StringEntry>& Session::string_table() {
     if (!strings) strings = scan_strings(*binary);
     return *strings;
@@ -77,6 +102,7 @@ Result<std::unique_ptr<Session>> open_session(const std::filesystem::path& path)
     s->path   = path;
     s->binary = std::move(*bin);
     const auto location = resolve_annotation_location(path, {}, cache::default_dir());
+    s->annotations_path = location.path;
     std::error_code ec;
     if (std::filesystem::exists(location.path, ec) && !ec) {
         auto annotations = Annotations::load(location.path);
@@ -84,8 +110,10 @@ Result<std::unique_ptr<Session>> open_session(const std::filesystem::path& path)
         s->annotations = std::move(*annotations);
     }
     s->functions = enumerate_functions(*s->binary, EnumerateMode::Auto);
-    for (auto& function : s->functions)
+    for (auto& function : s->functions) {
+        s->original_names.emplace(function.addr, function.name);
         if (const auto* name = s->annotations.name_for(function.addr)) function.name = *name;
+    }
     std::sort(s->functions.begin(), s->functions.end(),
               [](const DiscoveredFunction& a, const DiscoveredFunction& b) {
                   return a.addr < b.addr;

@@ -24,15 +24,25 @@ public:
     void set_content(const QString& text, std::vector<addr_t> line_addrs);
     bool go_to_address(addr_t va, bool center = true);
     [[nodiscard]] std::optional<addr_t> current_line_address() const;
+    [[nodiscard]] Kind kind() const noexcept { return kind_; }
+    // Identifier or number under the text cursor, empty when none.
+    [[nodiscard]] QString current_token() const { return token_at(textCursor()); }
+    // Case-insensitive search starting after the cursor. Moves the cursor
+    // onto the match and returns true when one exists.
+    bool find_next(const QString& needle);
 
 signals:
     void jump_requested(const QString& token);
     void back_requested();
+    // Tab: flip between the disassembly and pseudocode of this address.
+    void toggle_view_requested();
     void line_address_changed(spelunk::addr_t va);
 
 protected:
     void keyPressEvent(QKeyEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    // Keep Tab for the view toggle instead of focus traversal.
+    bool focusNextPrevChild(bool) override { return false; }
 
 private:
     void on_cursor_moved();

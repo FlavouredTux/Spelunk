@@ -13,6 +13,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QRegularExpression>
 #include <QSortFilterProxyModel>
 #include <QStandardItemModel>
 #include <QStatusBar>
@@ -24,12 +25,16 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <charconv>
+#include <format>
+#include <set>
 
 #include <spelunk/analysis/pipeline.hpp>
 #include <spelunk/binary/arch.hpp>
 #include <spelunk/binary/format.hpp>
 #include <spelunk/common/timing.hpp>
 
+#include "chooser.hpp"
 #include "code_view.hpp"
 #include "function_model.hpp"
 #include "hex_view.hpp"
@@ -81,6 +86,73 @@ QTableView* make_table(QAbstractItemModel* model, QWidget* parent, int sort_colu
     t->setEditTriggers(QAbstractItemView::NoEditTriggers);
     t->sortByColumn(sort_column, Qt::AscendingOrder);
     return t;
+}
+
+// One instruction line of the core's text disassembly:
+//   0x0000000000401000  48 89 e5                        mov rbp, rsp  ; comment
+struct RawInsn {
+    addr_t           addr = 0;
+    std::string_view bytes;
+    std::string_view mnemonic;
+    std::string_view operands;
+    std::string_view comment;
+};
+
+std::vector<std::string_view> split_lines(std::string_view text) {
+    std::vector<std::string_view> lines;
+    std::size_t pos = 0;
+    while (pos <= text.size()) {
+        const std::size_t nl = text.find('\n', pos);
+        if (nl == std::string_view::npos) { lines.push_back(text.substr(pos)); break; }
+        lines.push_back(text.substr(pos, nl - pos));
+        pos = nl + 1;
+    }
+    return lines;
+}
+
+bool is_hex_digit(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
+std::optional<RawInsn> parse_raw_insn(std::string_view line) {
+    if (line.size() < 20 || !line.starts_with("0x")) return std::nullopt;
+    RawInsn insn;
+    if (std::from_chars(line.data() + 2, line.data() + 18, insn.addr, 16).ec != std::errc{})
+        return std::nullopt;
+    std::size_t pos = 18;
+    while (pos < line.size() && line[pos] == ' ') ++pos;
+    const std::size_t bytes_start = pos;
+    // Opcode bytes are "hh " pairs; the column ends at a run of spaces.
+    while (pos + 2 < line.size() && is_hex_digit(line[pos]) && is_hex_digit(line[pos + 1]) &&
+           line[pos + 2] == ' ') {
+        pos += 3;
+        if (pos < line.size() && line[pos] == ' ') break;
+    }
+    insn.bytes = line.substr(bytes_start, pos - bytes_start);
+    while (!insn.bytes.empty() && insn.bytes.back() == ' ') insn.bytes.remove_suffix(1);
+    while (pos < line.size() && line[pos] == ' ') ++pos;
+    std::string_view rest = line.substr(pos);
+    if (const auto semi = rest.find("  ; "); semi != std::string_view::npos) {
+        insn.comment = rest.substr(semi + 4);
+        rest = rest.substr(0, semi);
+    }
+    const auto space = rest.find(' ');
+    insn.mnemonic = rest.substr(0, space);
+    if (space != std::string_view::npos) insn.operands = rest.substr(space + 1);
+    if (insn.mnemonic.empty()) return std::nullopt;
+    return insn;
+}
+
+// Direct call / jump target, when the operand is a bare address.
+std::optional<addr_t> branch_target(const RawInsn& insn) {
+    if (insn.mnemonic.empty() || (insn.mnemonic[0] != 'j' && insn.mnemonic != "call"))
+        return std::nullopt;
+    std::string_view op = insn.operands;
+    if (!op.starts_with("0x") || op.size() < 3) return std::nullopt;
+    addr_t va = 0;
+    const auto [end, ec] = std::from_chars(op.data() + 2, op.data() + op.size(), va, 16);
+    if (ec != std::errc{} || end != op.data() + op.size()) return std::nullopt;
+    return va;
 }
 
 }  // namespace
@@ -135,60 +207,93 @@ void MainWindow::spawn(std::function<void()> work) {
 }
 
 void MainWindow::build_actions() {
+    const auto make = [this](const QString& text, const QString& keys, auto slot) {
+        auto* a = new QAction(text, this);
+        if (!keys.isEmpty()) a->setShortcut(QKeySequence(keys));
+        connect(a, &QAction::triggered, this, slot);
+        return a;
+    };
+
     act_open_ = new QAction(QStringLiteral("&Open..."), this);
     act_open_->setShortcut(QKeySequence::Open);
     connect(act_open_, &QAction::triggered, this, &MainWindow::prompt_open);
+    act_save_ = make(QStringLiteral("&Save database"), QStringLiteral("Ctrl+W"), &MainWindow::save_database);
+    act_quit_ = make(QStringLiteral("&Quit"), QStringLiteral("Alt+X"), &QWidget::close);
 
-    act_quit_ = new QAction(QStringLiteral("&Quit"), this);
-    act_quit_->setShortcut(QKeySequence(QStringLiteral("Alt+X")));
-    connect(act_quit_, &QAction::triggered, this, &QWidget::close);
+    // Jump menu: IDA's default keymap.
+    act_back_ = make(QStringLiteral("Jump &back"), QStringLiteral("Esc"), &MainWindow::jump_back);
+    act_back_->setShortcutContext(Qt::WidgetShortcut);   // views handle Esc themselves
+    act_forward_ = make(QStringLiteral("Jump &forward"), QStringLiteral("Ctrl+Return"),
+                        &MainWindow::jump_forward);
+    act_jump_addr_ = make(QStringLiteral("Jump to &address..."), QStringLiteral("G"),
+                          &MainWindow::prompt_jump_address);
+    act_jump_fn_ = make(QStringLiteral("Jump to f&unction..."), QStringLiteral("Ctrl+P"),
+                        &MainWindow::choose_function);
+    act_names_ = make(QStringLiteral("Jump by &name..."), QStringLiteral("Ctrl+L"),
+                      &MainWindow::choose_name);
+    act_jump_entry_ = make(QStringLiteral("Jump to &entry point"), QStringLiteral("Ctrl+E"),
+                           &MainWindow::jump_to_entry);
+    act_mark_ = make(QStringLiteral("&Mark position..."), QStringLiteral("Alt+M"),
+                     &MainWindow::mark_position);
+    act_jump_mark_ = make(QStringLiteral("Jump to marke&d position..."), QStringLiteral("Ctrl+M"),
+                          &MainWindow::choose_mark);
+    act_xrefs_ = make(QStringLiteral("Jump to &xref to operand..."), QStringLiteral("X"),
+                      [this] { show_xrefs(false); });
+    act_xrefs_item_ = make(QStringLiteral("&List cross references to..."), QStringLiteral("Ctrl+X"),
+                           [this] { show_xrefs(true); });
 
-    act_back_ = new QAction(QStringLiteral("Jump &back"), this);
-    act_back_->setShortcut(QKeySequence(QStringLiteral("Alt+Left")));
-    connect(act_back_, &QAction::triggered, this, &MainWindow::jump_back);
+    // Search menu
+    act_search_text_ = make(QStringLiteral("&Text..."), QStringLiteral("Alt+T"),
+                            [this] { search_text(true); });
+    act_search_text_next_ = make(QStringLiteral("Ne&xt text"), QStringLiteral("Ctrl+T"),
+                                 [this] { search_text(false); });
+    act_search_bytes_ = make(QStringLiteral("Sequence of &bytes..."), QStringLiteral("Alt+B"),
+                             [this] { search_bytes(true); });
+    act_search_bytes_next_ = make(QStringLiteral("Next seq&uence of bytes"), QStringLiteral("Ctrl+B"),
+                                  [this] { search_bytes(false); });
 
-    act_forward_ = new QAction(QStringLiteral("Jump &forward"), this);
-    act_forward_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Return")));
-    connect(act_forward_, &QAction::triggered, this, &MainWindow::jump_forward);
+    // Edit menu. These act on the cursor in a code view, so they are bound
+    // to the tab area: typing in the filters must not trigger them.
+    act_rename_ = make(QStringLiteral("&Rename..."), QStringLiteral("N"), &MainWindow::rename_at_cursor);
+    act_comment_ = make(QStringLiteral("&Comment..."), QStringLiteral(":"), &MainWindow::comment_at_cursor);
+    act_comment_alt_ = make(QStringLiteral("Repeatable comment..."), QStringLiteral(";"),
+                            &MainWindow::comment_at_cursor);
+    act_comment_pseudo_ = make(QStringLiteral("Pseudocode comment..."), QStringLiteral("/"),
+                               &MainWindow::comment_at_cursor);
+    act_number_ = make(QStringLiteral("&Hexadecimal / decimal"), QStringLiteral("H"),
+                       &MainWindow::toggle_number);
+    act_toggle_view_ = make(QStringLiteral("Toggle &pseudocode / disassembly"), QStringLiteral("Tab"),
+                            &MainWindow::toggle_view);
+    act_graph_ = make(QStringLiteral("&Graph view"), QStringLiteral("Space"), [this] {
+        log(QStringLiteral("Graph view is not implemented yet; the listing is text only."));
+    });
+    for (QAction* a : {act_rename_, act_comment_, act_comment_alt_, act_comment_pseudo_, act_number_,
+                        act_toggle_view_, act_graph_, act_xrefs_}) {
+        a->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    }
+    act_filter_ = make(QStringLiteral("Quick &filter"), QStringLiteral("Ctrl+F"), &MainWindow::focus_filter);
 
-    act_jump_addr_ = new QAction(QStringLiteral("Jump to &address..."), this);
-    act_jump_addr_->setShortcut(QKeySequence(QStringLiteral("G")));
-    connect(act_jump_addr_, &QAction::triggered, this, &MainWindow::prompt_jump_address);
-
-    act_jump_fn_ = new QAction(QStringLiteral("Jump to f&unction..."), this);
-    act_jump_fn_->setShortcut(QKeySequence(QStringLiteral("Ctrl+P")));
-    connect(act_jump_fn_, &QAction::triggered, this, &MainWindow::prompt_jump_function);
-
-    act_jump_entry_ = new QAction(QStringLiteral("Jump to &entry point"), this);
-    act_jump_entry_->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
-    connect(act_jump_entry_, &QAction::triggered, this, &MainWindow::jump_to_entry);
-
+    // View > Open subviews
     act_disasm_ = new QAction(QStringLiteral("&Disassembly"), this);
     connect(act_disasm_, &QAction::triggered, this, [this] {
         if (auto* v = ensure_disassembly_tab()) tabs_->setCurrentWidget(v);
     });
+    act_pseudo_ = make(QStringLiteral("&Pseudocode"), QStringLiteral("F5"), &MainWindow::open_pseudocode);
+    // IDA binds H to the number base, so the hex view has no key of its own.
+    act_hex_ = make(QStringLiteral("&Hex dump"), QString(), &MainWindow::open_hex);
+    act_strings_ = make(QStringLiteral("&Strings"), QStringLiteral("Shift+F12"), &MainWindow::open_strings);
+    act_names_window_ = make(QStringLiteral("&Names"), QStringLiteral("Shift+F4"), &MainWindow::open_names);
+    act_imports_ = make(QStringLiteral("&Imports"), QString(), &MainWindow::open_imports);
+    act_exports_ = make(QStringLiteral("&Exports"), QString(), &MainWindow::open_exports);
+    act_segments_ = make(QStringLiteral("Se&gments"), QStringLiteral("Shift+F7"), &MainWindow::open_segments);
 
-    act_hex_ = new QAction(QStringLiteral("&Hex Dump"), this);
-    act_hex_->setShortcut(QKeySequence(QStringLiteral("H")));
-    connect(act_hex_, &QAction::triggered, this, &MainWindow::open_hex);
-
-    act_pseudo_ = new QAction(QStringLiteral("&Pseudocode"), this);
-    act_pseudo_->setShortcut(QKeySequence(QStringLiteral("F5")));
-    connect(act_pseudo_, &QAction::triggered, this, &MainWindow::open_pseudocode);
-
-    act_strings_ = new QAction(QStringLiteral("&Strings"), this);
-    act_strings_->setShortcut(QKeySequence(QStringLiteral("Shift+F12")));
-    connect(act_strings_, &QAction::triggered, this, &MainWindow::open_strings);
-
-    act_imports_ = new QAction(QStringLiteral("&Imports"), this);
-    connect(act_imports_, &QAction::triggered, this, &MainWindow::open_imports);
-
-    act_exports_ = new QAction(QStringLiteral("&Exports"), this);
-    connect(act_exports_, &QAction::triggered, this, &MainWindow::open_exports);
-
-    act_segments_ = new QAction(QStringLiteral("Se&gments"), this);
-    act_segments_->setShortcut(QKeySequence(QStringLiteral("Shift+F7")));
-    connect(act_segments_, &QAction::triggered, this, &MainWindow::open_segments);
+    act_opcodes_ = new QAction(QStringLiteral("Show &opcode bytes"), this);
+    act_opcodes_->setCheckable(true);
+    act_opcodes_->setChecked(show_opcodes_);
+    connect(act_opcodes_, &QAction::toggled, this, [this](bool on) {
+        show_opcodes_ = on;
+        refresh_views(false);
+    });
 
     act_about_ = new QAction(QStringLiteral("&About"), this);
     connect(act_about_, &QAction::triggered, this, [this] {
@@ -198,17 +303,33 @@ void MainWindow::build_actions() {
                 .arg(QApplication::applicationVersion(), QString::fromLatin1(qVersion())));
     });
 
-    for (QAction* a : {act_back_, act_forward_, act_jump_addr_, act_jump_fn_, act_jump_entry_,
-                        act_disasm_, act_hex_, act_pseudo_, act_strings_, act_imports_, act_exports_,
-                        act_segments_})
-        a->setEnabled(false);
+    for (QAction* a : session_actions()) a->setEnabled(false);
+}
+
+std::vector<QAction*> MainWindow::session_actions() const {
+    return {act_save_, act_back_, act_forward_, act_jump_addr_, act_jump_fn_, act_names_,
+            act_jump_entry_, act_mark_, act_jump_mark_, act_xrefs_, act_xrefs_item_,
+            act_search_text_, act_search_text_next_, act_search_bytes_, act_search_bytes_next_,
+            act_rename_, act_comment_, act_comment_alt_, act_comment_pseudo_, act_number_,
+            act_toggle_view_, act_graph_, act_disasm_, act_hex_, act_pseudo_, act_strings_,
+            act_names_window_, act_imports_, act_exports_, act_segments_};
 }
 
 void MainWindow::build_menus() {
     QMenu* file = menuBar()->addMenu(QStringLiteral("&File"));
     file->addAction(act_open_);
+    file->addAction(act_save_);
     file->addSeparator();
     file->addAction(act_quit_);
+
+    QMenu* edit = menuBar()->addMenu(QStringLiteral("&Edit"));
+    edit->addAction(act_rename_);
+    edit->addAction(act_comment_);
+    edit->addAction(act_comment_alt_);
+    edit->addAction(act_comment_pseudo_);
+    edit->addSeparator();
+    QMenu* operand = edit->addMenu(QStringLiteral("&Operand type"));
+    operand->addAction(act_number_);
 
     QMenu* jump = menuBar()->addMenu(QStringLiteral("&Jump"));
     jump->addAction(act_back_);
@@ -216,7 +337,21 @@ void MainWindow::build_menus() {
     jump->addSeparator();
     jump->addAction(act_jump_addr_);
     jump->addAction(act_jump_fn_);
+    jump->addAction(act_names_);
     jump->addAction(act_jump_entry_);
+    jump->addSeparator();
+    jump->addAction(act_xrefs_);
+    jump->addAction(act_xrefs_item_);
+    jump->addSeparator();
+    jump->addAction(act_mark_);
+    jump->addAction(act_jump_mark_);
+
+    QMenu* search = menuBar()->addMenu(QStringLiteral("&Search"));
+    search->addAction(act_search_text_);
+    search->addAction(act_search_text_next_);
+    search->addSeparator();
+    search->addAction(act_search_bytes_);
+    search->addAction(act_search_bytes_next_);
 
     QMenu* view = menuBar()->addMenu(QStringLiteral("&View"));
     QMenu* sub  = view->addMenu(QStringLiteral("&Open subviews"));
@@ -225,12 +360,20 @@ void MainWindow::build_menus() {
     sub->addAction(act_hex_);
     sub->addSeparator();
     sub->addAction(act_strings_);
+    sub->addAction(act_names_window_);
     sub->addAction(act_imports_);
     sub->addAction(act_exports_);
     sub->addAction(act_segments_);
     view->addSeparator();
+    view->addAction(act_toggle_view_);
+    view->addAction(act_graph_);
+    view->addAction(act_filter_);
+    view->addSeparator();
     // Dock toggles are appended in build_docks() once the docks exist.
     view->setObjectName(QStringLiteral("viewMenu"));
+
+    QMenu* options = menuBar()->addMenu(QStringLiteral("&Options"));
+    options->addAction(act_opcodes_);
 
     QMenu* help = menuBar()->addMenu(QStringLiteral("&Help"));
     help->addAction(act_about_);
@@ -270,6 +413,8 @@ void MainWindow::build_central() {
     tabs_->setMovable(true);
     tabs_->setDocumentMode(true);
     connect(tabs_, &QTabWidget::tabCloseRequested, this, &MainWindow::on_tab_close);
+    tabs_->addActions({act_rename_, act_comment_, act_comment_alt_, act_comment_pseudo_,
+                       act_number_, act_toggle_view_, act_graph_, act_xrefs_});
     setCentralWidget(tabs_);
 }
 
@@ -338,7 +483,7 @@ void MainWindow::build_docks() {
     out_dock_->setWidget(out_widget);
     addDockWidget(Qt::BottomDockWidgetArea, out_dock_);
 
-    resizeDocks({fn_dock_}, {440}, Qt::Horizontal);
+    resizeDocks({fn_dock_}, {520}, Qt::Horizontal);
     resizeDocks({out_dock_}, {160}, Qt::Vertical);
 
     if (auto* view = findChild<QMenu*>(QStringLiteral("viewMenu"))) {
@@ -416,15 +561,19 @@ void MainWindow::on_session_loaded(std::shared_ptr<Session> s, const QString& er
     log(QStringLiteral("Functions: %1.").arg(session_->functions.size()));
 
     fn_model_->set_session(session_.get());
-    fn_table_->resizeColumnsToContents();
-    fn_table_->horizontalHeader()->setSectionResizeMode(FunctionModel::Name, QHeaderView::Interactive);
-    fn_table_->setColumnWidth(FunctionModel::Name,
-                              std::clamp(fn_table_->columnWidth(FunctionModel::Name), 200, 320));
+    {
+        QHeaderView* header = fn_table_->horizontalHeader();
+        header->setStretchLastSection(true);
+        fn_table_->resizeColumnsToContents();
+        header->setSectionResizeMode(FunctionModel::Name, QHeaderView::Interactive);
+        fn_table_->setColumnWidth(FunctionModel::Name,
+                                  std::clamp(fn_table_->columnWidth(FunctionModel::Name), 180, 260));
+    }
     band_->set_session(session_.get());
 
-    for (QAction* a : {act_jump_addr_, act_jump_fn_, act_jump_entry_, act_disasm_, act_hex_,
-                        act_pseudo_, act_strings_, act_imports_, act_exports_, act_segments_})
-        a->setEnabled(true);
+    for (QAction* a : session_actions()) a->setEnabled(true);
+    update_history_actions();
+    log(QStringLiteral("Annotations: %1").arg(QString::fromStdString(session_->annotations_path.string())));
 
     jump_to_entry();
     start_xref_analysis();
@@ -487,14 +636,18 @@ void MainWindow::close_session() {
     fn_model_->set_session(nullptr);
     band_->set_session(nullptr);
     disasm_cache_.clear();
+    disasm_raw_.clear();
     pseudo_cache_.clear();
     pseudo_pending_.clear();
+    number_toggles_.clear();
+    marks_.clear();
     history_.clear();
     history_pos_ = 0;
     current_fn_.reset();
     session_.reset();
     addr_label_->clear();
     setWindowTitle(QStringLiteral("Spelunk"));
+    for (QAction* a : session_actions()) a->setEnabled(false);
     update_history_actions();
 }
 
@@ -584,8 +737,8 @@ void MainWindow::jump_forward() {
 }
 
 void MainWindow::update_history_actions() {
-    act_back_->setEnabled(!history_.empty() && history_pos_ > 0);
-    act_forward_->setEnabled(!history_.empty() && history_pos_ + 1 < history_.size());
+    act_back_->setEnabled(session_ && !history_.empty() && history_pos_ > 0);
+    act_forward_->setEnabled(session_ && !history_.empty() && history_pos_ + 1 < history_.size());
 }
 
 void MainWindow::prompt_jump_address() {
@@ -597,13 +750,6 @@ void MainWindow::prompt_jump_address() {
     if (ok && !text.trimmed().isEmpty()) jump_to_token(text.trimmed());
 }
 
-void MainWindow::prompt_jump_function() {
-    if (!session_) return;
-    fn_dock_->show();
-    fn_dock_->raise();
-    fn_filter_->setFocus();
-    fn_filter_->selectAll();
-}
 
 void MainWindow::jump_to_entry() {
     if (!session_) return;
@@ -649,44 +795,178 @@ void MainWindow::update_chrome(addr_t va) {
 
 MainWindow::Rendered MainWindow::render_disassembly(const FuncWindow& w) {
     Rendered out;
-    auto r = session_->disassembly(w);
-    if (!r) {
-        out.text = QStringLiteral("; %1").arg(QString::fromStdString(r.error().message));
+    const std::string* raw = raw_disassembly(w.start);
+    if (!raw) {
+        auto r = session_->disassembly(w);
+        out.text = QStringLiteral("; %1").arg(r ? QStringLiteral("no instructions")
+                                                : QString::fromStdString(r.error().message));
         out.lines.push_back(0);
         return out;
     }
-    // Rewrite spelunk's `0x<16 hex>` line prefix into IDA's `<segment>:<16 hex>`.
-    std::string_view text(*r);
-    std::string      rewritten;
-    rewritten.reserve(text.size() + text.size() / 8);
-    std::size_t pos = 0;
-    while (pos <= text.size()) {
-        const std::size_t nl   = text.find('\n', pos);
-        const std::size_t end  = nl == std::string_view::npos ? text.size() : nl;
-        std::string_view  line = text.substr(pos, end - pos);
-        addr_t            va   = 0;
-        if (line.size() >= 18 && line.starts_with("0x")) {
-            bool all_hex = true;
-            for (std::size_t i = 2; i < 18; ++i) {
-                const char c = line[i];
-                const bool h = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-                if (!h) { all_hex = false; break; }
+    std::vector<RawInsn> insns;
+    for (std::string_view line : split_lines(*raw))
+        if (auto insn = parse_raw_insn(line)) insns.push_back(*insn);
+    if (insns.empty()) {
+        out.text = QStringLiteral("; no instructions");
+        out.lines.push_back(0);
+        return out;
+    }
+
+    const auto& notes = session_->annotations.notes;
+    // In-function branch targets become loc_ labels, with IDA's
+    // `CODE XREF` comments naming the jumps that reach them.
+    std::map<addr_t, std::vector<addr_t>> labels;
+    for (const auto& insn : insns) {
+        if (auto target = branch_target(insn); target && *target != w.start &&
+            *target >= insns.front().addr && *target <= insns.back().addr && insn.mnemonic != "call")
+            labels[*target].push_back(insn.addr);
+    }
+    for (const auto& [va, _] : session_->annotations.renames)
+        if (va != w.start && va >= insns.front().addr && va <= insns.back().addr) labels[va];
+
+    const auto name_of = [&](addr_t va) -> std::string {
+        if (std::string n = session_->name_at(va); !n.empty()) return n;
+        if (va == w.start) return display_name(w.label);
+        return std::format("loc_{:x}", va);
+    };
+    const auto ref_text = [&](addr_t from, addr_t to, char kind) {
+        const DiscoveredFunction* f = session_->function_at(from);
+        std::string where = f ? name_of(f->addr) : std::format("{:x}", from);
+        if (f && from != f->addr) where += std::format("+{:X}", from - f->addr);
+        return std::format("{}{}{}", where, from < to ? "↑" : "↓", kind);
+    };
+
+    QString text;
+    const auto prefix = [&](addr_t va) {
+        return QString::fromStdString(session_->segment_name(va)) + QLatin1Char(':') +
+               QStringLiteral("%1").arg(va, 16, 16, QChar('0')).toUpper();
+    };
+    const auto emit_line = [&](addr_t va, const QString& body, addr_t line_va) {
+        text += prefix(va);
+        if (!body.isEmpty()) text += QLatin1Char(' ') + body;
+        text += QLatin1Char('\n');
+        out.lines.push_back(line_va);
+    };
+    const auto with_comment = [](QString body, const QStringList& comments) {
+        if (comments.isEmpty()) return body;
+        if (body.size() < 56) body = body.leftJustified(56);
+        else body += QLatin1Char(' ');
+        return body + QStringLiteral("; ") + comments.join(QStringLiteral(" | "));
+    };
+    const QString name_pad = QString(16, QLatin1Char(' '));
+
+    // Function header
+    const addr_t start = w.start;
+    emit_line(start, {}, 0);
+    emit_line(start, QStringLiteral("; =============== S U B R O U T I N E ======================================="), 0);
+    emit_line(start, {}, 0);
+    if (auto note = notes.find(start); note != notes.end())
+        emit_line(start, QStringLiteral("; ") + QString::fromStdString(note->second), 0);
+    {
+        QStringList refs;
+        const auto callers = session_->callers_of(start);
+        for (std::size_t i = 0; i < callers.size() && i < 3; ++i)
+            refs << QString::fromStdString(ref_text(callers[i], start, 'p'));
+        if (callers.size() > 3) refs << QStringLiteral("...");
+        // The name column is 16 wide including the separator, so `proc`
+        // lines up with the mnemonics.
+        const QString head = QString::fromStdString(name_of(start)).leftJustified(15) +
+                             QStringLiteral(" proc near");
+        emit_line(start, refs.isEmpty() ? head
+                                        : with_comment(head, {QStringLiteral("CODE XREF: ") + refs.join(QStringLiteral(", "))}),
+                  start);
+    }
+
+    for (const auto& insn : insns) {
+        if (auto label = labels.find(insn.addr); label != labels.end() && insn.addr != start) {
+            QStringList refs;
+            for (std::size_t i = 0; i < label->second.size() && i < 3; ++i)
+                refs << QString::fromStdString(ref_text(label->second[i], insn.addr, 'j'));
+            if (label->second.size() > 3) refs << QStringLiteral("...");
+            emit_line(insn.addr, {}, 0);
+            const QString head = QString::fromStdString(name_of(insn.addr)) + QLatin1Char(':');
+            emit_line(insn.addr, refs.isEmpty() ? head
+                                                : with_comment(head, {QStringLiteral("CODE XREF: ") + refs.join(QStringLiteral(", "))}),
+                      insn.addr);
+        }
+
+        std::string mnemonic(insn.mnemonic);
+        if (mnemonic == "jne") mnemonic = "jnz";
+        else if (mnemonic == "je") mnemonic = "jz";
+        QString operands = QString::fromUtf8(insn.operands.data(), static_cast<qsizetype>(insn.operands.size()));
+        QStringList comments;
+        bool named_target = false;
+        if (auto target = branch_target(insn)) {
+            const DiscoveredFunction* f = session_->function_at(*target);
+            std::string name;
+            if (labels.contains(*target) || *target == start || (f && f->addr == *target))
+                name = name_of(*target);
+            else if (f)
+                name = std::format("{}+{:X}", name_of(f->addr), *target - f->addr);
+            // PLT stubs are not discovered functions; the core still names
+            // them in its comment (`call 0x401030  ; printf`).
+            static const QRegularExpression plain_name(QStringLiteral(R"(^[A-Za-z_.$@?][\w.$@?]*$)"));
+            if (name.empty() && !insn.comment.empty()) {
+                const QString c = QString::fromUtf8(insn.comment.data(), static_cast<qsizetype>(insn.comment.size()));
+                if (plain_name.match(c).hasMatch()) name = c.toStdString();
             }
-            if (all_hex) {
-                va = std::stoull(std::string(line.substr(2, 16)), nullptr, 16);
-                rewritten += session_->segment_name(va);
-                rewritten += ':';
-                rewritten += line.substr(2);
+            if (!name.empty()) {
+                operands = QString::fromStdString(name);
+                named_target = true;
             }
         }
-        if (va == 0) rewritten += line;
-        out.lines.push_back(va);
-        if (nl == std::string_view::npos) break;
-        rewritten += '\n';
-        pos = nl + 1;
+        // Immediates that are function addresses read as `offset name`, as
+        // in IDA. Memory operands keep their raw address.
+        if (!named_target && !operands.contains(QLatin1Char('['))) {
+            static const QRegularExpression imm(QStringLiteral(R"(\b0x([0-9a-fA-F]+)\b)"));
+            QString rewritten;
+            qsizetype last_end = 0;
+            auto it = imm.globalMatch(operands);
+            while (it.hasNext()) {
+                const auto m = it.next();
+                bool ok = false;
+                const addr_t va = m.captured(1).toULongLong(&ok, 16);
+                const DiscoveredFunction* f = ok ? session_->function_at(va) : nullptr;
+                if (!f || f->addr != va) continue;
+                rewritten += operands.mid(last_end, m.capturedStart(0) - last_end);
+                rewritten += QStringLiteral("offset ") + QString::fromStdString(name_of(va));
+                last_end = m.capturedEnd(0);
+            }
+            if (last_end > 0) operands = rewritten + operands.mid(last_end);
+        }
+        apply_number_toggles(operands, insn.addr);
+        if (auto note = notes.find(insn.addr); note != notes.end())
+            comments << QString::fromStdString(note->second);
+        // The core annotates calls with the callee name; once the operand
+        // already says it, the comment is noise.
+        if (!insn.comment.empty() && !named_target)
+            comments << QString::fromUtf8(insn.comment.data(), static_cast<qsizetype>(insn.comment.size()));
+
+        QString body;
+        if (show_opcodes_)
+            body += QString::fromUtf8(insn.bytes.data(), static_cast<qsizetype>(insn.bytes.size()))
+                        .toUpper().leftJustified(30);
+        body += name_pad + QString::fromStdString(mnemonic).leftJustified(8) + operands;
+        emit_line(insn.addr, with_comment(body, comments), insn.addr);
     }
-    out.text = QString::fromStdString(rewritten);
+
+    const addr_t last = insns.back().addr;
+    emit_line(last, QString::fromStdString(name_of(start)).leftJustified(15) + QStringLiteral(" endp"), last);
+    emit_line(last, {}, 0);
+    text.chop(1);
+    out.text = std::move(text);
     return out;
+}
+
+const std::string* MainWindow::raw_disassembly(addr_t fn) {
+    if (auto it = disasm_raw_.find(fn); it != disasm_raw_.end()) return &it->second;
+    const DiscoveredFunction* f = session_->function_at(fn);
+    if (!f || f->addr != fn) return nullptr;
+    auto win = session_->window_for(*f);
+    if (!win) return nullptr;
+    auto r = session_->disassembly(*win);
+    if (!r) return nullptr;
+    return &disasm_raw_.emplace(fn, std::move(*r)).first->second;
 }
 
 MainWindow::Rendered MainWindow::render_pseudocode(const Session& session,
@@ -722,7 +1002,8 @@ MainWindow::Rendered MainWindow::render_pseudocode(const Session& session,
 void MainWindow::request_pseudocode(const FuncWindow& w) {
     if (!pseudo_ || !session_) return;
     if (auto cached = pseudo_cache_.find(w.start); cached != pseudo_cache_.end()) {
-        pseudo_->set_content(cached->second.text, cached->second.lines);
+        const Rendered shown = decorate_pseudocode(cached->second);
+        pseudo_->set_content(shown.text, shown.lines);
         emit pseudocode_ready();
         return;
     }
@@ -740,7 +1021,8 @@ void MainWindow::request_pseudocode(const FuncWindow& w) {
                 if (pseudo_ && current_fn_ && *current_fn_ == addr) {
                     const auto va = disasm_ ? disasm_->current_line_address()
                                             : std::nullopt;
-                    pseudo_->set_content(it->second.text, it->second.lines);
+                    const Rendered shown = decorate_pseudocode(it->second);
+                    pseudo_->set_content(shown.text, shown.lines);
                     if (va) pseudo_->go_to_address(*va);
                     emit pseudocode_ready();
                 }
@@ -755,6 +1037,7 @@ CodeView* MainWindow::ensure_disassembly_tab() {
         new AsmHighlighter(disasm_->document());
         connect(disasm_, &CodeView::jump_requested, this, &MainWindow::jump_to_token);
         connect(disasm_, &CodeView::back_requested, this, &MainWindow::jump_back);
+        connect(disasm_, &CodeView::toggle_view_requested, this, &MainWindow::toggle_view);
         connect(disasm_, &CodeView::line_address_changed, this, &MainWindow::sync_chrome);
         tabs_->insertTab(0, disasm_, QStringLiteral("Spelunk View-A"));
         if (current_fn_) {
@@ -776,6 +1059,7 @@ CodeView* MainWindow::ensure_pseudocode_tab() {
         new PseudoHighlighter(pseudo_->document());
         connect(pseudo_, &CodeView::jump_requested, this, &MainWindow::jump_to_token);
         connect(pseudo_, &CodeView::back_requested, this, &MainWindow::jump_back);
+        connect(pseudo_, &CodeView::toggle_view_requested, this, &MainWindow::toggle_view);
         connect(pseudo_, &CodeView::line_address_changed, this, &MainWindow::sync_chrome);
         const int at = disasm_ ? tabs_->indexOf(disasm_) + 1 : 0;
         tabs_->insertTab(at, pseudo_, QStringLiteral("Pseudocode-A"));
@@ -833,15 +1117,32 @@ void MainWindow::open_table_tab(const QString& title, QStandardItemModel* model)
             return;
         }
     }
-    QTableView* table = make_table(model, tabs_, 0);
-    model->setParent(table);
+    auto* page   = new QWidget(tabs_);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    auto* proxy = new QSortFilterProxyModel(page);
+    proxy->setSourceModel(model);
+    proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+    proxy->setFilterKeyColumn(-1);
+    model->setParent(page);
+    QTableView* table = make_table(proxy, page, 0);
     connect(table, &QAbstractItemView::activated, this, [this, table](const QModelIndex& idx) {
         const QVariant v = table->model()->index(idx.row(), 0).data(kAddressRole);
         if (v.isValid()) jump_to_or_hex(static_cast<addr_t>(v.toULongLong()));
     });
-    tabs_->addTab(table, title);
-    tabs_->setCurrentWidget(table);
+    auto* filter = new QLineEdit(page);
+    filter->setObjectName(QStringLiteral("quickFilter"));
+    filter->setPlaceholderText(QStringLiteral("Quick filter (Ctrl+F)"));
+    filter->setClearButtonEnabled(true);
+    filter->hide();
+    connect(filter, &QLineEdit::textChanged, proxy, &QSortFilterProxyModel::setFilterFixedString);
+    layout->addWidget(table, 1);
+    layout->addWidget(filter);
+    tabs_->addTab(page, title);
+    tabs_->setCurrentWidget(page);
     table->resizeColumnsToContents();
+    table->setFocus();
 }
 
 HexView* MainWindow::ensure_hex_tab() {
@@ -858,7 +1159,7 @@ HexView* MainWindow::ensure_hex_tab() {
         int at = 0;
         if (pseudo_) at = tabs_->indexOf(pseudo_) + 1;
         else if (disasm_) at = tabs_->indexOf(disasm_) + 1;
-        tabs_->insertTab(at, hex_, QStringLiteral("Hex Dump"));
+        tabs_->insertTab(at, hex_, QStringLiteral("Hex View-1"));
     }
     return hex_;
 }
@@ -963,6 +1264,455 @@ void MainWindow::on_tab_close(int index) {
     if (w == pseudo_) pseudo_ = nullptr;
     if (w == hex_) hex_ = nullptr;
     w->deleteLater();
+}
+
+// ---------------------------------------------------------------------------
+// IDA commands
+// ---------------------------------------------------------------------------
+
+CodeView* MainWindow::current_code_view() const {
+    return qobject_cast<CodeView*>(tabs_->currentWidget());
+}
+
+std::optional<addr_t> MainWindow::resolve_token(const QString& token) const {
+    if (!session_ || token.isEmpty()) return std::nullopt;
+    const std::string name = token.toStdString();
+    for (const auto& [va, renamed] : session_->annotations.renames)
+        if (renamed == name) return va;
+    for (const auto& f : session_->functions)
+        if (f.name == name || display_name(f.name) == name) return f.addr;
+    // Dummy names carry their address: sub_401000, loc_401010, unk_...
+    static const QRegularExpression dummy(
+        QStringLiteral(R"(^(?:sub|loc|locret|unk|byte|word|dword|qword|off|str|asc|stru|j)_([0-9A-Fa-f]+)$)"));
+    if (const auto m = dummy.match(token); m.hasMatch()) {
+        bool ok = false;
+        const addr_t va = m.captured(1).toULongLong(&ok, 16);
+        if (ok) return va;
+    }
+    if (token.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) {
+        bool ok = false;
+        const addr_t va = token.mid(2).toULongLong(&ok, 16);
+        if (ok && session_->section_at(va)) return va;
+    }
+    for (const auto& sym : session_->binary->symbols())
+        if (sym.addr != 0 && (sym.name == name || display_name(sym.name) == name)) return sym.addr;
+    return std::nullopt;
+}
+
+void MainWindow::rename_at_cursor() {
+    CodeView* view = current_code_view();
+    if (!session_ || !view) return;
+    std::optional<addr_t> target = resolve_token(view->current_token());
+    if (!target) {
+        if (view->kind() == CodeView::Kind::Pseudocode && !view->current_token().isEmpty()) {
+            log(QStringLiteral("Renaming local variables is not supported yet; "
+                               "put the cursor on a function or global name."));
+            return;
+        }
+        // IDA names the address of the current line.
+        target = view->current_line_address();
+    }
+    if (!target) return;
+    const std::string current = session_->name_at(*target);
+    bool ok = false;
+    QString name = QInputDialog::getText(
+        this, QStringLiteral("Rename address"),
+        QStringLiteral("Please enter a name for %1\n(empty restores the default name)").arg(hex(*target)),
+        QLineEdit::Normal, QString::fromStdString(current), &ok).trimmed();
+    if (!ok) return;
+    static const QRegularExpression valid(QStringLiteral(R"(^[A-Za-z_$?@.][\w$?@.:]*$)"));
+    if (!name.isEmpty() && !valid.match(name).hasMatch()) {
+        QMessageBox::warning(this, QStringLiteral("Rename address"),
+                             QStringLiteral("'%1' is not a valid name.").arg(name));
+        return;
+    }
+    if (!name.isEmpty()) {
+        if (auto other = resolve_token(name); other && *other != *target) {
+            QMessageBox::warning(this, QStringLiteral("Rename address"),
+                                 QStringLiteral("The name '%1' is already used at %2.").arg(name, hex(*other)));
+            return;
+        }
+    }
+    session_->rename(*target, name.toStdString());
+    log(name.isEmpty() ? QStringLiteral("%1: name removed.").arg(hex(*target))
+                       : QStringLiteral("%1: renamed to %2.").arg(hex(*target), name));
+    save_database();
+    refresh_views(true);
+}
+
+void MainWindow::comment_at_cursor() {
+    CodeView* view = current_code_view();
+    if (!session_ || !view) return;
+    const auto va = view->current_line_address();
+    if (!va) return;
+    auto& notes = session_->annotations.notes;
+    const auto it = notes.find(*va);
+    bool ok = false;
+    const QString text = QInputDialog::getMultiLineText(
+        this, QStringLiteral("Comment"), QStringLiteral("Comment at %1").arg(hex(*va)),
+        it == notes.end() ? QString() : QString::fromStdString(it->second), &ok).trimmed();
+    if (!ok) return;
+    if (text.isEmpty()) notes.erase(*va);
+    else notes[*va] = QString(text).replace(QLatin1Char('\n'), QLatin1Char(' ')).toStdString();
+    save_database();
+    refresh_views(false);
+}
+
+void MainWindow::show_xrefs(bool current_item) {
+    CodeView* view = current_code_view();
+    if (!session_) return;
+    std::optional<addr_t> target;
+    if (view && !current_item) target = resolve_token(view->current_token());
+    if (!target && current_fn_) target = current_fn_;
+    if (!target) return;
+    if (!session_->xrefs_ready) {
+        log(QStringLiteral("Cross-references are still being computed."));
+        return;
+    }
+
+    auto* model = new QStandardItemModel(this);
+    model->setHorizontalHeaderLabels({QStringLiteral("Address"), QStringLiteral("Direction"),
+                                      QStringLiteral("Type"), QStringLiteral("Text")});
+    const auto where = [&](addr_t va) {
+        const DiscoveredFunction* f = session_->function_at(va);
+        if (!f) return hex(va);
+        QString text = QString::fromStdString(session_->name_at(f->addr));
+        if (va != f->addr) text += QStringLiteral("+%1").arg(va - f->addr, 0, 16).toUpper();
+        return text;
+    };
+    const auto add = [&](addr_t from, const QString& type, const QString& text) {
+        model->appendRow({addr_item(from, where(from)),
+                          text_item(from < *target ? QStringLiteral("Up") : QStringLiteral("Down")),
+                          text_item(type), text_item(text)});
+    };
+
+    // Code references: scan each caller for the instructions that reach
+    // the target, since the call graph records only the calling function.
+    std::set<addr_t> scanned;
+    std::vector<addr_t> sources(session_->callers_of(*target).begin(), session_->callers_of(*target).end());
+    if (const auto* own = session_->function_at(*target)) sources.push_back(own->addr);
+    for (addr_t fn : sources) {
+        if (!scanned.insert(fn).second) continue;
+        const std::string* raw = raw_disassembly(fn);
+        bool found = false;
+        if (raw) {
+            for (std::string_view line : split_lines(*raw)) {
+                auto insn = parse_raw_insn(line);
+                if (!insn || branch_target(*insn) != target) continue;
+                found = true;
+                add(insn->addr, insn->mnemonic == "call" ? QStringLiteral("p") : QStringLiteral("j"),
+                    QStringLiteral("%1 %2").arg(QString::fromUtf8(insn->mnemonic.data(),
+                                                                  static_cast<qsizetype>(insn->mnemonic.size())),
+                                                QString::fromStdString(session_->name_at(*target))));
+            }
+        }
+        if (!found && fn != session_->function_at(*target)->addr) add(fn, QStringLiteral("p"), {});
+    }
+    // Data references to strings, from the string scan's xref lists.
+    if (session_->strings) {
+        for (const auto& str : *session_->strings) {
+            if (str.addr != *target) continue;
+            for (addr_t from : str.xrefs)
+                add(from, QStringLiteral("o"), QStringLiteral("\"%1\"").arg(QString::fromStdString(str.text)));
+        }
+    }
+    if (model->rowCount() == 0) {
+        log(QStringLiteral("There are no xrefs to %1.").arg(where(*target)));
+        delete model;
+        return;
+    }
+    Chooser chooser(QStringLiteral("xrefs to %1").arg(where(*target)), model, this);
+    if (auto va = chooser.choose()) jump_to_or_hex(*va);
+}
+
+void MainWindow::choose_function() {
+    if (!session_) return;
+    auto* model = new QStandardItemModel(this);
+    model->setHorizontalHeaderLabels({QStringLiteral("Function name"), QStringLiteral("Segment"),
+                                      QStringLiteral("Start"), QStringLiteral("Length")});
+    for (const auto& f : session_->functions) {
+        model->appendRow({addr_item(f.addr, QString::fromStdString(display_name(f.name))),
+                          text_item(QString::fromStdString(session_->segment_name(f.addr))),
+                          text_item(hex16(f.addr).toUpper()),
+                          text_item(QStringLiteral("%1").arg(f.size, 8, 16, QChar('0')).toUpper())});
+    }
+    Chooser chooser(QStringLiteral("Choose function to jump to"), model, this);
+    if (current_fn_) chooser.select_address(*current_fn_);
+    if (auto va = chooser.choose()) jump_to(*va);
+}
+
+QStandardItemModel* MainWindow::names_model() {
+    auto* model = new QStandardItemModel(this);
+    model->setHorizontalHeaderLabels({QStringLiteral("Name"), QStringLiteral("Address"),
+                                      QStringLiteral("Public")});
+    std::set<addr_t> seen;
+    for (const auto& f : session_->functions) {
+        seen.insert(f.addr);
+        model->appendRow({addr_item(f.addr, QString::fromStdString(session_->name_at(f.addr))),
+                          text_item(QString::fromStdString(session_->segment_name(f.addr)) +
+                                    QLatin1Char(':') + hex16(f.addr).toUpper()),
+                          text_item({})});
+    }
+    for (const auto& sym : session_->binary->symbols()) {
+        if (sym.addr == 0 || sym.is_import || !seen.insert(sym.addr).second) continue;
+        model->appendRow({addr_item(sym.addr, QString::fromStdString(display_name(sym.name))),
+                          text_item(QString::fromStdString(session_->segment_name(sym.addr)) +
+                                    QLatin1Char(':') + hex16(sym.addr).toUpper()),
+                          text_item(sym.is_export ? QStringLiteral("P") : QString())});
+    }
+    return model;
+}
+
+void MainWindow::choose_name() {
+    if (!session_) return;
+    Chooser chooser(QStringLiteral("Jump by name"), names_model(), this);
+    if (current_fn_) chooser.select_address(*current_fn_);
+    if (auto va = chooser.choose()) jump_to_or_hex(*va);
+}
+
+void MainWindow::open_names() {
+    if (!session_) return;
+    open_table_tab(QStringLiteral("Names"), names_model());
+}
+
+void MainWindow::mark_position() {
+    CodeView* view = current_code_view();
+    if (!session_ || !view) return;
+    const auto va = view->current_line_address();
+    if (!va) return;
+    bool ok = false;
+    const QString desc = QInputDialog::getText(
+        this, QStringLiteral("Mark position"), QStringLiteral("Enter mark description"),
+        QLineEdit::Normal, QString::fromStdString(session_->name_at(*va)).isEmpty()
+                               ? hex(*va) : QString::fromStdString(session_->name_at(*va)), &ok);
+    if (!ok) return;
+    std::erase_if(marks_, [&](const auto& m) { return m.first == *va; });
+    marks_.emplace_back(*va, desc);
+    log(QStringLiteral("Marked %1: %2").arg(hex(*va), desc));
+}
+
+void MainWindow::choose_mark() {
+    if (!session_) return;
+    if (marks_.empty()) {
+        log(QStringLiteral("No marked positions. Alt+M marks the current line."));
+        return;
+    }
+    auto* model = new QStandardItemModel(this);
+    model->setHorizontalHeaderLabels({QStringLiteral("Address"), QStringLiteral("Description")});
+    for (const auto& [va, desc] : marks_)
+        model->appendRow({addr_item(va, QString::fromStdString(session_->segment_name(va)) +
+                                            QLatin1Char(':') + hex16(va).toUpper()),
+                          text_item(desc)});
+    Chooser chooser(QStringLiteral("Select a marked position"), model, this);
+    if (auto va = chooser.choose()) jump_to_or_hex(*va);
+}
+
+void MainWindow::toggle_view() {
+    if (!session_) return;
+    QWidget* cur = tabs_->currentWidget();
+    if (cur == pseudo_ && pseudo_) {
+        const auto va = pseudo_->current_line_address();
+        CodeView* d = ensure_disassembly_tab();
+        tabs_->setCurrentWidget(d);
+        if (va) d->go_to_address(*va);
+        d->setFocus();
+        return;
+    }
+    open_pseudocode();
+}
+
+void MainWindow::toggle_number() {
+    CodeView* view = current_code_view();
+    if (!session_ || !view) return;
+    const QString tok = view->current_token();
+    const auto va = view->current_line_address();
+    if (tok.isEmpty() || !va) return;
+    auto& toggles = number_toggles_[*va];
+    // Toggling a shown replacement restores the original literal.
+    for (auto it = toggles.begin(); it != toggles.end(); ++it) {
+        if (it->second == tok) {
+            toggles.erase(it);
+            refresh_views(false);
+            return;
+        }
+    }
+    bool ok = false;
+    QString replacement;
+    if (tok.startsWith(QStringLiteral("0x"), Qt::CaseInsensitive)) {
+        const qulonglong v = tok.mid(2).toULongLong(&ok, 16);
+        if (ok) replacement = QString::number(v);
+    } else {
+        const qulonglong v = tok.toULongLong(&ok, 10);
+        if (ok) replacement = QStringLiteral("0x%1").arg(v, 0, 16);
+    }
+    if (replacement.isEmpty()) return;
+    toggles[tok] = replacement;
+    refresh_views(false);
+}
+
+void MainWindow::apply_number_toggles(QString& text, addr_t va) const {
+    const auto it = number_toggles_.find(va);
+    if (it == number_toggles_.end()) return;
+    for (const auto& [from, to] : it->second) {
+        const QRegularExpression word(QStringLiteral(R"((?<![\w$@]))") +
+                                      QRegularExpression::escape(from) +
+                                      QStringLiteral(R"((?![\w$@]))"));
+        text.replace(word, to);
+    }
+}
+
+MainWindow::Rendered MainWindow::decorate_pseudocode(const Rendered& raw) const {
+    if (!session_) return raw;
+    const auto& notes = session_->annotations.notes;
+    if (notes.empty() && number_toggles_.empty()) return raw;
+    QStringList lines = raw.text.split(QLatin1Char('\n'));
+    std::set<addr_t> commented;
+    for (qsizetype i = 0; i < lines.size() && static_cast<std::size_t>(i) < raw.lines.size(); ++i) {
+        const addr_t va = raw.lines[static_cast<std::size_t>(i)];
+        if (va == 0) continue;
+        apply_number_toggles(lines[i], va);
+        if (auto note = notes.find(va); note != notes.end() && commented.insert(va).second)
+            lines[i] += QStringLiteral(" // ") + QString::fromStdString(note->second);
+    }
+    return Rendered{lines.join(QLatin1Char('\n')), raw.lines};
+}
+
+void MainWindow::refresh_views(bool names_changed) {
+    if (!session_) return;
+    disasm_cache_.clear();
+    if (names_changed) {
+        pseudo_cache_.clear();
+        const int row = fn_table_->currentIndex().row();
+        fn_model_->set_session(session_.get());
+        if (row >= 0) fn_table_->selectRow(row);
+    }
+    const auto keep = [](CodeView* view, const std::function<void()>& rerender) {
+        const int  scroll = view->verticalScrollBar()->value();
+        const int  line   = view->textCursor().blockNumber();
+        const int  column = view->textCursor().positionInBlock();
+        rerender();
+        QTextCursor c(view->document()->findBlockByNumber(line));
+        c.movePosition(QTextCursor::Right, QTextCursor::MoveAnchor,
+                       std::min(column, c.block().length() - 1));
+        view->setTextCursor(c);
+        view->verticalScrollBar()->setValue(scroll);
+    };
+    const DiscoveredFunction* fn = current_fn_ ? session_->function_at(*current_fn_) : nullptr;
+    auto win = fn ? session_->window_for(*fn) : std::nullopt;
+    if (disasm_ && win) {
+        keep(disasm_, [&] {
+            auto& r = disasm_cache_.emplace(fn->addr, render_disassembly(*win)).first->second;
+            disasm_->set_content(r.text, r.lines);
+        });
+    }
+    if (pseudo_ && win) {
+        if (auto cached = pseudo_cache_.find(win->start); cached != pseudo_cache_.end()) {
+            keep(pseudo_, [&] {
+                const Rendered shown = decorate_pseudocode(cached->second);
+                pseudo_->set_content(shown.text, shown.lines);
+            });
+        } else {
+            request_pseudocode(*win);
+        }
+    }
+    if (current_fn_) update_chrome(disasm_ && disasm_->current_line_address()
+                                       ? *disasm_->current_line_address() : *current_fn_);
+}
+
+void MainWindow::search_text(bool prompt) {
+    CodeView* view = current_code_view();
+    if (!session_ || !view) return;
+    if (prompt || last_text_search_.isEmpty()) {
+        bool ok = false;
+        const QString text = QInputDialog::getText(this, QStringLiteral("Text search"),
+                                                   QStringLiteral("String"), QLineEdit::Normal,
+                                                   last_text_search_, &ok);
+        if (!ok || text.isEmpty()) return;
+        last_text_search_ = text;
+    }
+    if (!view->find_next(last_text_search_))
+        log(QStringLiteral("Search failed: '%1' not found below the cursor in this view.").arg(last_text_search_));
+}
+
+void MainWindow::search_bytes(bool prompt) {
+    if (!session_) return;
+    if (prompt || last_byte_search_.empty()) {
+        bool ok = false;
+        const QString text = QInputDialog::getText(
+            this, QStringLiteral("Binary search"),
+            QStringLiteral("Hex bytes (?? = any) or a \"quoted string\""), QLineEdit::Normal, {}, &ok).trimmed();
+        if (!ok || text.isEmpty()) return;
+        std::vector<int> pattern;
+        if (text.size() >= 2 && text.startsWith(QLatin1Char('"')) && text.endsWith(QLatin1Char('"'))) {
+            for (char c : text.mid(1, text.size() - 2).toStdString()) pattern.push_back(static_cast<unsigned char>(c));
+        } else {
+            for (const QString& part : text.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+                if (part == QStringLiteral("??") || part == QStringLiteral("?")) { pattern.push_back(-1); continue; }
+                bool byte_ok = false;
+                const uint v = part.toUInt(&byte_ok, 16);
+                if (!byte_ok || v > 0xff) {
+                    log(QStringLiteral("Binary search: '%1' is not a byte.").arg(part));
+                    return;
+                }
+                pattern.push_back(static_cast<int>(v));
+            }
+        }
+        if (pattern.empty()) return;
+        last_byte_search_ = std::move(pattern);
+    }
+    std::optional<addr_t> here;
+    if (CodeView* view = current_code_view()) here = view->current_line_address();
+    if (!here && current_fn_) here = current_fn_;
+    const addr_t from = here ? *here + 1 : 0;
+
+    const auto& pat = last_byte_search_;
+    std::optional<addr_t> best_after, best_wrapped;
+    for (const auto& sec : session_->binary->sections()) {
+        const auto& bytes = sec.data;
+        if (bytes.size() < pat.size()) continue;
+        for (std::size_t i = 0; i + pat.size() <= bytes.size(); ++i) {
+            bool hit = true;
+            for (std::size_t k = 0; k < pat.size() && hit; ++k)
+                hit = pat[k] < 0 || static_cast<int>(static_cast<unsigned char>(bytes[i + k])) == pat[k];
+            if (!hit) continue;
+            const addr_t va = sec.vaddr + i;
+            if (va >= from) {
+                if (!best_after || va < *best_after) best_after = va;
+                break;
+            }
+            if (!best_wrapped) best_wrapped = va;
+        }
+    }
+    const auto found = best_after ? best_after : best_wrapped;
+    if (!found) {
+        log(QStringLiteral("Binary search failed: pattern not found."));
+        return;
+    }
+    if (!best_after) log(QStringLiteral("Binary search wrapped to the start."));
+    jump_to_or_hex(*found);
+}
+
+void MainWindow::save_database() {
+    if (!session_) return;
+    if (auto r = session_->save_annotations(); !r) {
+        log(QStringLiteral("Could not save annotations: %1").arg(QString::fromStdString(r.error().message)));
+        return;
+    }
+    log(QStringLiteral("Saved annotations to %1.").arg(QString::fromStdString(session_->annotations_path.string())));
+}
+
+void MainWindow::focus_filter() {
+    QWidget* page = tabs_->currentWidget();
+    if (auto* filter = page ? page->findChild<QLineEdit*>(QStringLiteral("quickFilter")) : nullptr) {
+        filter->show();
+        filter->setFocus();
+        filter->selectAll();
+        return;
+    }
+    fn_dock_->show();
+    fn_dock_->raise();
+    fn_filter_->setFocus();
+    fn_filter_->selectAll();
 }
 
 }  // namespace spelunk::gui

@@ -13,6 +13,7 @@ add_executable(spelunk_gui
     src/hex_view.cpp
     src/highlighters.cpp
     src/nav_band.cpp
+    src/chooser.cpp
 )
 
 set_target_properties(spelunk_gui PROPERTIES
@@ -28,3 +29,23 @@ target_link_libraries(spelunk_gui PRIVATE
 target_compile_definitions(spelunk_gui PRIVATE
     SPELUNK_GUI_VERSION="${PROJECT_VERSION}"
 )
+
+if(BUILD_TESTING)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    # The window sources minus main.cpp, driven by QtTest key presses.
+    add_executable(spelunk_gui_keymap_test
+        tests/keymap_test.cpp
+        src/main_window.cpp
+        src/session.cpp
+        src/function_model.cpp
+        src/code_view.cpp
+        src/hex_view.cpp
+        src/highlighters.cpp
+        src/nav_band.cpp
+        src/chooser.cpp
+    )
+    target_link_libraries(spelunk_gui_keymap_test PRIVATE spelunk::core spelunk::flags Qt6::Widgets Qt6::Test)
+    add_test(NAME gui_ida_keymap
+             COMMAND spelunk_gui_keymap_test "${CMAKE_SOURCE_DIR}/tests/fixtures/pointer_walk.prebuilt")
+    set_tests_properties(gui_ida_keymap PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()

@@ -552,6 +552,10 @@ void Emitter::analyze(const IrFunction& f) {
                 const bool memory_address =
                     (inst.op == IrOp::Load || inst.op == IrOp::Store) && i == 0;
                 if (!memory_address) record_escape(inst.srcs[i]);
+                // A load through a derived pointer (`p = &local; p->next`)
+                // reads the object at an offset the slot scan cannot see.
+                else if (inst.op == IrOp::Load && !stack_offset(inst.srcs[i]))
+                    record_escape(inst.srcs[i]);
             }
             if (inst.op != IrOp::Load && inst.op != IrOp::Store) {
                 for (const IrValue& operand : inst.phi_operands) {
@@ -580,6 +584,21 @@ void Emitter::analyze(const IrFunction& f) {
                     }
                 }
             }
+        }
+    }
+    // An escaped address exposes the whole object that starts there, and the
+    // frame does not record where that object ends: `&head` passed to a call
+    // lets the callee read `head.next` eight bytes up. Stored slots from the
+    // lowest escaped offset upward that the function never reads itself are
+    // therefore kept. Slots it does read already keep their stores, and
+    // leaving them out preserves argument-spill forwarding (`a6`, not
+    // `local_88`) above an escaped buffer.
+    if (!escaped_stack_slots.empty()) {
+        const i64 lowest = *escaped_stack_slots.begin();
+        for (const auto& [stored_off, stored_size] : stored_stack_ranges) {
+            if (loaded_stack_slots.contains(stored_off)) continue;
+            if (stored_off >= lowest || range_contains(stored_off, stored_size, lowest))
+                escaped_stack_slots.insert(stored_off);
         }
     }
     loaded_stack_slots.insert(escaped_stack_slots.begin(),

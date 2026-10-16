@@ -1197,6 +1197,14 @@ spelunk_golden_test(
     ARGS    "-p|-s|sum_and_report"
     GOLDEN  pointer_walk.sum_and_report.pseudo.txt
 )
+# `&head` escapes into the call, so `head.next = &tail` and tail's fields
+# are observable even though main never reads them back.
+spelunk_golden_test(
+    NAME    pointer_walk_main_pseudo
+    FIXTURE pointer_walk
+    ARGS    "-p|-s|main"
+    GOLDEN  pointer_walk.main.pseudo.txt
+)
 
 # Stack-canary prologue+check suppression (-fstack-protector-strong).
 spelunk_golden_test(

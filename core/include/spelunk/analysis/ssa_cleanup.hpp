@@ -3,6 +3,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -48,6 +49,8 @@ struct SsaMergeLocalRecoveryCallbacks {
 struct SsaMergeLocalRecoveryResult {
     std::map<SsaKey, std::string>     value_names;
     std::map<std::string, SsaMergeLocal> locals;
+    // Loads read after a coalesced feeder overwrites their address's local.
+    std::set<SsaKey>                  snapshot_loads;
 };
 
 [[nodiscard]] SsaMergeLocalRecoveryResult

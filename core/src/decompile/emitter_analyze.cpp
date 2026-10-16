@@ -915,6 +915,10 @@ void Emitter::name_merge_values() {
     auto recovered = recover_ssa_merge_locals(*fn, callbacks);
     merge_value_names = std::move(recovered.value_names);
     merge_locals = std::move(recovered.locals);
+    for (const SsaKey& key : recovered.snapshot_loads) {
+        if (!memory_snapshot_loads.insert(key).second) continue;
+        if (auto position = ssa_uses.definition_position(key)) hidden.erase(*position);
+    }
 
     // A Win64 bool/byte return often reaches the shared epilogue as a
     // full-width RAX Phi. False arms clear AL with `rax & ~0xff`; true

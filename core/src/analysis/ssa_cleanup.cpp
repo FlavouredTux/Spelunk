@@ -1,5 +1,6 @@
 #include <spelunk/analysis/ssa_cleanup.hpp>
 
+#include <algorithm>
 #include <format>
 #include <map>
 #include <optional>
@@ -59,6 +60,184 @@ namespace {
     }
 }
 
+using Position = std::pair<std::size_t, std::size_t>;
+
+// A loop-carried value such as `next = p->next` usually also feeds the loop
+// test and the exit path, so it is not a pure Phi feeder. It can still share
+// the Phi's local when the two never interfere: once `feeder` is defined, no
+// path back to the Phi block reads an old Phi value, and every other read of
+// `feeder` happens on such a path. Without this, the back-edge update was
+// dropped and `p = p->next` vanished from the loop.
+//
+// Reads after the feeder may still reach the old value through an earlier,
+// inlined definition (`p->key` loaded before the update but consumed after
+// it). Loads on that path are added to `snapshot_loads` so the emitter binds
+// them where they are defined; any other such dependence rejects the merge.
+[[nodiscard]] bool feeder_replaces_dead_phi(const IrFunction& fn, const IrInst& phi,
+                                            addr_t phi_block, const SsaKey& feeder,
+                                            const std::set<SsaKey>& phi_keys,
+                                            const std::map<SsaKey, Position>& definitions,
+                                            std::set<SsaKey>& snapshot_loads) {
+    const auto feeder_definition = definitions.find(feeder);
+    if (feeder_definition == definitions.end()) return false;
+    const auto [def_bi, def_ii] = feeder_definition->second;
+    // The feeder must arrive over its own block's edge into the Phi block.
+    bool own_edge = false;
+    for (std::size_t i = 0; i < phi.phi_operands.size() && i < phi.phi_preds.size(); ++i) {
+        own_edge |= ssa_key(phi.phi_operands[i]) == feeder &&
+                    phi.phi_preds[i] == fn.blocks[def_bi].start;
+    }
+    if (!own_edge) return false;
+    // Only back edges: forward joins keep their existing pure-feeder rule.
+    {
+        std::set<addr_t> seen;
+        std::vector<addr_t> work{phi_block};
+        bool loops = false;
+        while (!work.empty() && !loops) {
+            const addr_t address = work.back();
+            work.pop_back();
+            if (!seen.insert(address).second) continue;
+            const auto found = fn.block_at.find(address);
+            if (found == fn.block_at.end()) continue;
+            loops = found->second == def_bi;
+            const auto& successors = fn.blocks[found->second].successors;
+            work.insert(work.end(), successors.begin(), successors.end());
+        }
+        if (!loops) return false;
+    }
+
+    // Everything reachable after the feeder without re-entering the Phi
+    // block. Phi operands are read on the incoming edge, so they belong to
+    // the region of their predecessor.
+    std::set<Position> region;
+    std::vector<IrValue> edge_reads;
+    std::set<std::size_t> visited;
+    std::vector<Position> pending{{def_bi, def_ii + 1}};
+    while (!pending.empty()) {
+        const auto [bi, first] = pending.back();
+        pending.pop_back();
+        const auto& block = fn.blocks[bi];
+        for (std::size_t ii = first; ii < block.insts.size(); ++ii) {
+            if (block.insts[ii].op != IrOp::Phi) region.insert({bi, ii});
+        }
+        for (addr_t successor : block.successors) {
+            const auto found = fn.block_at.find(successor);
+            if (found == fn.block_at.end()) continue;  // tail call or exit
+            for (const auto& inst : fn.blocks[found->second].insts) {
+                if (inst.op != IrOp::Phi || &inst == &phi) continue;
+                const auto joined = ssa_key(inst.dst);
+                for (std::size_t i = 0; i < inst.phi_operands.size() && i < inst.phi_preds.size(); ++i) {
+                    if (inst.phi_preds[i] != block.start) continue;
+                    // A Phi of the same local re-established here must take
+                    // the feeder, or the local changes under its later reads.
+                    if (joined && phi_keys.contains(*joined) &&
+                        ssa_key(inst.phi_operands[i]) != feeder) return false;
+                    edge_reads.push_back(inst.phi_operands[i]);
+                }
+            }
+            if (successor == phi_block) {
+                // Another incoming edge may carry its own assignment.
+                if (bi != def_bi) return false;
+                continue;
+            }
+            if (!visited.insert(found->second).second) continue;
+            pending.push_back({found->second, 0});
+        }
+    }
+
+    std::set<SsaKey> captures;
+    std::set<SsaKey> checked;
+    // True when reading `value` inside the region cannot observe the
+    // overwritten Phi value, recording loads that must bind early.
+    const auto safe_read = [&](const auto& self, const IrValue& value, int depth) -> bool {
+        const auto key = ssa_key(value);
+        if (!key || *key == feeder) return true;
+        if (phi_keys.contains(*key)) {
+            // Only a Phi joined after the feeder holds the current value.
+            const auto found = definitions.find(*key);
+            return found != definitions.end() && visited.contains(found->second.first);
+        }
+        if (!checked.insert(*key).second) return true;
+        const auto found = definitions.find(*key);
+        if (found == definitions.end() || region.contains(found->second)) return true;
+        if (depth > 32) return false;
+        const IrInst& definition = fn.blocks[found->second.first].insts[found->second.second];
+        if (definition.op == IrOp::Phi) return true;  // a different, still-live value
+        bool depends = false;
+        for (u8 i = 0; i < definition.src_count; ++i) {
+            if (definition.op == IrOp::Load) {
+                // Only the address matters; the result is captured.
+                std::set<SsaKey> saved = checked;
+                const bool clean = self(self, definition.srcs[i], depth + 1);
+                checked = std::move(saved);
+                depends |= !clean;
+            } else if (!self(self, definition.srcs[i], depth + 1)) {
+                return false;
+            }
+        }
+        if (depends) captures.insert(*key);
+        return true;
+    };
+    std::size_t feeder_reads_in_region = 0;
+    for (const auto& [bi, ii] : region) {
+        const IrInst& inst = fn.blocks[bi].insts[ii];
+        for (u8 i = 0; i < inst.src_count; ++i) {
+            feeder_reads_in_region += ssa_key(inst.srcs[i]) == feeder;
+            if (!safe_read(safe_read, inst.srcs[i], 0)) return false;
+        }
+    }
+    for (const auto& value : edge_reads) {
+        feeder_reads_in_region += ssa_key(value) == feeder;
+        if (!safe_read(safe_read, value, 0)) return false;
+    }
+    std::size_t feeder_reads = 0;
+    for (const auto& block : fn.blocks) {
+        for (const auto& inst : block.insts) {
+            if (&inst == &phi) continue;
+            for (u8 i = 0; i < inst.src_count; ++i) feeder_reads += ssa_key(inst.srcs[i]) == feeder;
+            for (const auto& value : inst.phi_operands) feeder_reads += ssa_key(value) == feeder;
+        }
+    }
+    if (feeder_reads != feeder_reads_in_region) return false;
+    snapshot_loads.insert(captures.begin(), captures.end());
+    return true;
+}
+
+// Whether `key` (a Phi joined at `home`) can be read once control reaches
+// `join` without first passing back through `home`.
+[[nodiscard]] bool phi_live_at(const IrFunction& fn, const SsaKey& key,
+                               addr_t home, addr_t join) {
+    if (home == join) return true;
+    std::set<addr_t> seen;
+    std::vector<addr_t> work{join};
+    while (!work.empty()) {
+        const addr_t address = work.back();
+        work.pop_back();
+        if (address == home || !seen.insert(address).second) continue;
+        const auto found = fn.block_at.find(address);
+        if (found == fn.block_at.end()) continue;
+        const auto& block = fn.blocks[found->second];
+        for (const auto& inst : block.insts) {
+            for (u8 i = 0; i < inst.src_count; ++i) {
+                if (ssa_key(inst.srcs[i]) == key) return true;
+            }
+        }
+        for (addr_t successor : block.successors) {
+            const auto next = fn.block_at.find(successor);
+            if (next == fn.block_at.end()) continue;
+            const auto& phis = fn.blocks[next->second].insts;
+            for (const auto& inst : phis) {
+                if (inst.op != IrOp::Phi) continue;
+                for (std::size_t i = 0; i < inst.phi_operands.size() && i < inst.phi_preds.size(); ++i) {
+                    if (inst.phi_preds[i] == address && ssa_key(inst.phi_operands[i]) == key) return true;
+                }
+            }
+            work.push_back(successor);
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 SsaMergeLocalRecoveryResult
@@ -72,12 +251,14 @@ recover_ssa_merge_locals(const IrFunction& fn,
 
     std::vector<SsaKey> phi_keys;
     std::map<SsaKey, const IrInst*> phi_defs;
+    std::map<SsaKey, addr_t> phi_block;
     for (const auto& bb : fn.blocks) {
         for (const auto& inst : bb.insts) {
             if (inst.op != IrOp::Phi) continue;
             auto k = ssa_key(inst.dst);
             if (!k || callbacks.use_count(*k) == 0) continue;
             phi_defs.emplace(*k, &inst);
+            phi_block.emplace(*k, bb.start);
             phi_keys.push_back(*k);
         }
     }
@@ -106,6 +287,44 @@ recover_ssa_merge_locals(const IrFunction& fn,
                 callbacks.type_name(od->dst) == callbacks.type_name(inst->dst)) {
                 unite(k, *ok);
             }
+        }
+    }
+
+    // Phis fed by the same value on different edges (a loop header and its
+    // exit join both taking the updated accumulator) are one source variable
+    // when neither is read where the other is joined.
+    std::map<SsaKey, std::vector<SsaKey>> phis_by_operand;
+    for (const auto& [k, inst] : phi_defs) {
+        for (const auto& op : inst->phi_operands) {
+            auto ok = ssa_key(op);
+            const IrInst* od = callbacks.def_of(op);
+            if (!ok || phi_defs.contains(*ok) || !od || od->op == IrOp::Phi ||
+                od->op == IrOp::Clobber) continue;
+            auto& sharing = phis_by_operand[*ok];
+            if (std::ranges::find(sharing, k) == sharing.end()) sharing.push_back(k);
+        }
+    }
+    for (const auto& [_, sharing] : phis_by_operand) {
+        bool disjoint = sharing.size() > 1;
+        for (std::size_t i = 0; i < sharing.size() && disjoint; ++i) {
+            for (std::size_t j = i + 1; j < sharing.size() && disjoint; ++j) {
+                const auto& a = sharing[i];
+                const auto& b = sharing[j];
+                disjoint = callbacks.type_name(phi_defs.at(a)->dst) ==
+                               callbacks.type_name(phi_defs.at(b)->dst) &&
+                           !phi_live_at(fn, a, phi_block.at(a), phi_block.at(b)) &&
+                           !phi_live_at(fn, b, phi_block.at(b), phi_block.at(a));
+            }
+        }
+        if (!disjoint) continue;
+        for (std::size_t i = 1; i < sharing.size(); ++i) unite(sharing[0], sharing[i]);
+    }
+
+    std::map<SsaKey, Position> definitions;
+    for (std::size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        const auto& insts = fn.blocks[bi].insts;
+        for (std::size_t ii = 0; ii < insts.size(); ++ii) {
+            if (auto key = ssa_key(insts[ii].dst)) definitions.emplace(*key, Position{bi, ii});
         }
     }
 
@@ -197,7 +416,9 @@ recover_ssa_merge_locals(const IrFunction& fn,
                         for (u8 i = 0; i < od->src_count; ++i)
                             in_place |= ssa_key(od->srcs[i]) == keys[0];
                     }
-                    if (!in_place) continue;
+                    if (!in_place &&
+                        !feeder_replaces_dead_phi(fn, *phi, phi_block.at(k), *ok, group_keys,
+                                                  definitions, result.snapshot_loads)) continue;
                 }
                 result.value_names.emplace(*ok, name);
                 local.keys.push_back(*ok);

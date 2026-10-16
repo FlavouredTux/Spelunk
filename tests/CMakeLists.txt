@@ -487,6 +487,7 @@ spelunk_build_fixture(dead_store OPT "-O0")
 spelunk_build_fixture(fp_scalar)
 spelunk_build_fixture(printf_noise)
 spelunk_build_fixture(low_byte_flag)
+spelunk_build_fixture(pointer_walk)
 # Stack-protector on so the canary prologue/epilogue actually get emitted.
 spelunk_build_fixture(canary PROTECTOR "-fstack-protector-strong")
 spelunk_build_fixture(noreturn_import)
@@ -1186,6 +1187,15 @@ spelunk_golden_test(
     FIXTURE low_byte_flag
     ARGS    "-p|-s|low_byte_flag_merge"
     GOLDEN  low_byte_flag.low_byte_flag_merge.pseudo.txt
+)
+
+# The `n = n->next` update also feeds the loop test, and the accumulator
+# shares its update with the exit join. Both must stay in the loop.
+spelunk_golden_test(
+    NAME    pointer_walk_sum_pseudo
+    FIXTURE pointer_walk
+    ARGS    "-p|-s|sum_and_report"
+    GOLDEN  pointer_walk.sum_and_report.pseudo.txt
 )
 
 # Stack-canary prologue+check suppression (-fstack-protector-strong).

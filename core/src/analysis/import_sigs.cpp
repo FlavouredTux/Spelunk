@@ -33,8 +33,6 @@ inline TypeRef t_int8u  (TypeArena& a) { return t_int(a, 8,  false); }
 inline TypeRef t_int8s  (TypeArena& a) { return t_int(a, 8,  true);  }
 inline TypeRef t_int64s (TypeArena& a) { return t_int(a, 64, true);  }
 inline TypeRef t_int64u (TypeArena& a) { return t_int(a, 64, false); }
-inline TypeRef t_size   (TypeArena& a) { return t_int(a, 64, false); }   // size_t (LP64)
-inline TypeRef t_ssize  (TypeArena& a) { return t_int(a, 64, true);  }   // ssize_t (LP64)
 inline TypeRef t_float32(TypeArena& a) { return a.float_t(32); }
 inline TypeRef t_float64(TypeArena& a) { return a.float_t(64); }
 
@@ -63,8 +61,17 @@ inline TypeRef t_filep (TypeArena& a) { return t_voidp(a); }
 // Coverage targets the imports that show up in nearly every binary:
 // stdio + string + stdlib + unistd basics + a few syscalls. Adding
 // entries is mechanical - keep them grouped by header for readability.
-std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
+std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a,
+                                   unsigned pointer_bits) {
     using SV = std::string_view;
+    // size_t and ssize_t follow the target's pointer width.
+    const auto size_bits = static_cast<u8>(pointer_bits);
+    const auto t_size = [size_bits](TypeArena& arena) {
+        return t_int(arena, size_bits, false);
+    };
+    const auto t_ssize = [size_bits](TypeArena& arena) {
+        return t_int(arena, size_bits, true);
+    };
     auto m = [&](TypeRef ret, std::vector<TypeRef> params, bool variadic = false)
         -> std::optional<ImportSigSpec> {
         return ImportSigSpec{ret, std::move(params), variadic};
@@ -191,6 +198,46 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
         return m(t_voidp(a), {t_voidp(a)});
     if (name == "Sleep") return m(t_void(a), {t_int32u(a)});
     if (name == "IsDebuggerPresent") return m(t_int32s(a), {});
+
+    // ---- Win32 kernel32 / user32 basics ------------------------------------
+    // HANDLE/HMODULE/LPVOID are opaque pointers, DWORD/UINT unsigned, BOOL
+    // signed. Exact arity is what x86 needs to know how much a stdcall
+    // callee pops.
+    if (name == "ExitProcess" || name == "ExitThread" || name == "SetLastError")
+        return m(t_void(a), {t_int32u(a)});
+    if (name == "TerminateProcess")
+        return m(t_int32s(a), {t_voidp(a), t_int32u(a)});
+    if (name == "GetCurrentProcess" || name == "GetCurrentThread" ||
+        name == "GetProcessHeap")
+        return m(t_voidp(a), {});
+    if (name == "GetCurrentProcessId" || name == "GetCurrentThreadId" ||
+        name == "GetLastError" || name == "GetTickCount")
+        return m(t_int32u(a), {});
+    if (name == "GetModuleHandleA" || name == "LoadLibraryA")
+        return m(t_voidp(a), {t_charp(a)});
+    if (name == "GetModuleHandleW" || name == "LoadLibraryW")
+        return m(t_voidp(a), {t_u16p(a)});
+    if (name == "GetProcAddress") return m(t_voidp(a), {t_voidp(a), t_charp(a)});
+    if (name == "FreeLibrary") return m(t_int32s(a), {t_voidp(a)});
+    if (name == "VirtualAlloc")
+        return m(t_voidp(a), {t_voidp(a), t_size(a), t_int32u(a), t_int32u(a)});
+    if (name == "VirtualFree")
+        return m(t_int32s(a), {t_voidp(a), t_size(a), t_int32u(a)});
+    if (name == "VirtualProtect")
+        return m(t_int32s(a), {t_voidp(a), t_size(a), t_int32u(a),
+                               a.ptr_t(t_int32u(a))});
+    if (name == "HeapAlloc")
+        return m(t_voidp(a), {t_voidp(a), t_int32u(a), t_size(a)});
+    if (name == "HeapFree")
+        return m(t_int32s(a), {t_voidp(a), t_int32u(a), t_voidp(a)});
+    if (name == "WaitForSingleObject")
+        return m(t_int32u(a), {t_voidp(a), t_int32u(a)});
+    if (name == "OutputDebugStringA") return m(t_void(a), {t_charp(a)});
+    if (name == "OutputDebugStringW") return m(t_void(a), {t_u16p(a)});
+    if (name == "MessageBoxA")
+        return m(t_int32s(a), {t_voidp(a), t_charp(a), t_charp(a), t_int32u(a)});
+    if (name == "MessageBoxW")
+        return m(t_int32s(a), {t_voidp(a), t_u16p(a), t_u16p(a), t_int32u(a)});
 
     // ---- Win32 process / remote-memory APIs ------------------------------
     // HANDLE/LPVOID stay opaque pointers until named Win32 typedefs become
@@ -547,8 +594,8 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a) {
 }  // namespace
 
 std::optional<ImportSigSpec>
-lookup_import_sig(std::string_view name, TypeArena& arena) {
-    return build(name, arena);
+lookup_import_sig(std::string_view name, TypeArena& arena, unsigned pointer_bits) {
+    return build(name, arena, pointer_bits);
 }
 
 ImportStringKind import_arg_string_kind(std::string_view name,
@@ -735,7 +782,8 @@ void seed_call_return_types(const Binary& b, IrFunction& fn) {
             }
             if (!s) { int_args.clear(); fp_args.clear(); continue; }
             auto spec = lookup_import_sig(
-                strip_import_name_decorations(s->name), fn.types);
+                strip_import_name_decorations(s->name), fn.types,
+                b.arch() == Arch::X86 ? 32u : 64u);
             if (!spec) { int_args.clear(); fp_args.clear(); continue; }
 
             const Abi abi = abi_for(b.format(), b.arch(), b.endian());

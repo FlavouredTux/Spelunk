@@ -358,6 +358,11 @@ struct Emitter {
     arg_name_for_live_in(Reg r) const;
 
     [[nodiscard]] IrType abi_word_type() const noexcept;
+    // size_t width for import prototypes on this ABI. PPC32 and ARM32
+    // still read the LP64 table.
+    [[nodiscard]] unsigned import_pointer_bits() const noexcept {
+        return is_x86_32_abi(abi) ? 32u : 64u;
+    }
 
     [[nodiscard]] std::string_view abi_word_c_type() const noexcept;
 

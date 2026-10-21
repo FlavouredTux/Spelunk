@@ -115,7 +115,8 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
                 if (call.op != IrOp::Call) break;
                 if (const auto* imported = binary->import_at_plt(call.target1)) {
                     TypeArena arena;
-                    if (auto signature = lookup_import_sig(clean_import_name(imported->name), arena);
+                    if (auto signature = lookup_import_sig(clean_import_name(imported->name), arena,
+                                                          import_pointer_bits());
                         signature && arena.kind(signature->ret) == TypeKind::Float) {
                         delegated = arena.node(signature->ret).f.bits <= 32 ? IrType::F32 : IrType::F64;
                     }
@@ -318,7 +319,7 @@ Emitter::known_call_return_lane(const IrInst& inst) const {
     auto name = call_known_name(inst);
     if (name) {
         TypeArena arena;
-        auto spec = lookup_import_sig(*name, arena);
+        auto spec = lookup_import_sig(*name, arena, import_pointer_bits());
         if (spec && !spec->ret.is_top() && !spec->ret.is_bottom()) {
             switch (arena.kind(spec->ret)) {
                 case TypeKind::Void:  return CallReturnLane::Void;
@@ -418,7 +419,7 @@ Emitter::known_call_return_c_type(const IrInst& inst) const {
     auto name = call_known_name(inst);
     if (name) {
         TypeArena arena;
-        auto spec = lookup_import_sig(*name, arena);
+        auto spec = lookup_import_sig(*name, arena, import_pointer_bits());
         if (spec && !spec->ret.is_top() && !spec->ret.is_bottom()) {
             const TypeNode& ret = arena.node(spec->ret);
             if (ret.kind == TypeKind::Void) return std::string{"void"};

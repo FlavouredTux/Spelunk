@@ -716,7 +716,7 @@ Emitter::abi_layout_for(const FunctionSig& sig) const {
 std::vector<InferredArgument>
 Emitter::abi_layout_for_import(std::string_view name) const {
     TypeArena arena;
-    auto spec = lookup_import_sig(name, arena);
+    auto spec = lookup_import_sig(name, arena, import_pointer_bits());
     if (!spec) return {};
     const auto int_regs = int_arg_regs(abi);
     const auto fp_regs = fp_arg_regs(abi);

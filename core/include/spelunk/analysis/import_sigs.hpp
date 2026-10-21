@@ -30,8 +30,9 @@ struct ImportSigSpec {
 
 // Look up a known import. `name` is the bare symbol name returned by
 // `strip_import_name_decorations`. Returns nullopt for any unknown name.
+// `pointer_bits` sizes size_t / ssize_t parameters and returns.
 [[nodiscard]] std::optional<ImportSigSpec>
-lookup_import_sig(std::string_view name, TypeArena& arena);
+lookup_import_sig(std::string_view name, TypeArena& arena, unsigned pointer_bits = 64);
 
 enum class ImportStringKind : u8 {
     None,

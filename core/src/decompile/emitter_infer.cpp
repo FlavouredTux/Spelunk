@@ -319,7 +319,7 @@ void Emitter::infer_import_pointer_stack_values() {
                 continue;
             }
             TypeArena arena;
-            auto signature = lookup_import_sig(*import, arena);
+            auto signature = lookup_import_sig(*import, arena, import_pointer_bits());
             if (!signature) {
                 args.clear();
                 continue;

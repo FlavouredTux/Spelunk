@@ -190,7 +190,8 @@ void Emitter::prepare_phi_copies() {
             if (!signature && binary) {
                 if (const auto* imported = binary->import_at_plt(inst.target1)) {
                     TypeArena types;
-                    const auto spec = lookup_import_sig(strip_import_name_decorations(imported->name), types);
+                    const auto spec = lookup_import_sig(strip_import_name_decorations(imported->name), types,
+                                                    import_pointer_bits());
                     const auto scalar_type = [&](TypeRef type) {
                         const auto kind = types.kind(type);
                         return kind == TypeKind::Int || kind == TypeKind::Ptr;

@@ -443,7 +443,7 @@ Emitter::import_arity(addr_t plt_addr, std::string_view name) const {
     }
     {
         TypeArena arena;
-        if (auto spec = lookup_import_sig(name, arena); spec) {
+        if (auto spec = lookup_import_sig(name, arena, import_pointer_bits()); spec) {
             // Variadic call width comes from the existing format-string
             // parser. Returning only the fixed prototype prefix here
             // would truncate printf/scanf payload arguments.

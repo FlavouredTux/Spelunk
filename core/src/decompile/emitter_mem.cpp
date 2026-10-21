@@ -766,6 +766,13 @@ Emitter::stack_storage_base(i64 offset, u32 access_bytes) const noexcept {
 
 std::string Emitter::stack_address_expr(i64 offset,
                                         const IrValue* value) const {
+    // The address of an incoming stack argument is the address of that
+    // parameter, `&a1`, not of a frame slot.
+    if (value) {
+        if (auto entry = entry_stack_offset(*value); entry && *entry > 0) {
+            if (auto arg = incoming_stack_arg_name(*value, *entry)) return "&" + *arg;
+        }
+    }
     std::optional<i64> base;
     if (value) {
         if (auto key = ssa_key(*value); key) {
@@ -852,6 +859,11 @@ std::string Emitter::format_mem(const IrValue& addr, IrType t, Reg seg,
             if (auto arg = incoming_stack_arg_name(addr, *off)) return *arg;
             if (has_name) return it->second.name;
             return stack_name(*off);
+        }
+        // A stack pointer merged from paths that agree, as after a callee-pop
+        // call in one branch, is no frame base but still reaches arguments.
+        if (auto entry = entry_stack_offset(addr); entry && *entry > 0) {
+            if (auto arg = incoming_stack_arg_name(addr, *entry)) return *arg;
         }
         if (auto navigation = try_render_ppc_navigation_table_access(
                 addr, t, depth); navigation) return *navigation;

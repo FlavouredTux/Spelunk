@@ -423,6 +423,7 @@ Emitter::entry_stack_offset(const IrValue& v, int depth) const {
         }
         if (v.version == 0) return i64{0};
         const IrInst* d = def_of(v);
+        if (d && d->op == IrOp::Phi) return entry_stack_offset_of_phi(v, *d, depth);
         if (!d || d->op != IrOp::Assign || d->src_count < 1) {
             return std::nullopt;
         }
@@ -448,6 +449,41 @@ Emitter::entry_stack_offset(const IrValue& v, int depth) const {
         if (base) return *base + d->srcs[0].imm;
     }
     return std::nullopt;
+}
+
+// A stack pointer merged from paths that agree on its offset, as after a
+// branch that calls a callee-pop function. Loop phis see themselves through
+// the back edge: assume the offset the other edges agree on, then check it.
+std::optional<i64>
+Emitter::entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int depth) const {
+    const auto key = ssa_key(v);
+    if (!key) return std::nullopt;
+    if (auto assumed = stack_phi_assumptions.find(*key);
+        assumed != stack_phi_assumptions.end()) {
+        return assumed->second;
+    }
+    stack_phi_assumptions.emplace(*key, std::nullopt);
+    std::optional<i64> agreed;
+    std::vector<const IrValue*> deferred;
+    bool consistent = true;
+    for (const auto& operand : phi.phi_operands) {
+        if (ssa_key(operand) == key) continue;
+        const auto offset = entry_stack_offset(operand, depth + 1);
+        if (!offset) {
+            deferred.push_back(&operand);
+            continue;
+        }
+        if (agreed && *agreed != *offset) consistent = false;
+        agreed = offset;
+    }
+    if (agreed && consistent && !deferred.empty()) {
+        stack_phi_assumptions[*key] = agreed;
+        for (const IrValue* operand : deferred) {
+            if (entry_stack_offset(*operand, depth + 1) != agreed) consistent = false;
+        }
+    }
+    stack_phi_assumptions.erase(*key);
+    return consistent ? agreed : std::nullopt;
 }
 
 std::optional<i64> Emitter::stack_offset(const IrValue& v, int depth) const {

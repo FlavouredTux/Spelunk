@@ -982,6 +982,11 @@ struct Emitter {
     // ABI's entry-r1 + 0x28 overflow slot.
     [[nodiscard]] std::optional<i64>
     entry_stack_offset(const IrValue& v, int depth = 0) const;
+    [[nodiscard]] std::optional<i64>
+    entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int depth) const;
+    // Stack-pointer phis being resolved, with the offset each is assumed
+    // to hold while its back edges are checked.
+    mutable std::map<SsaKey, std::optional<i64>> stack_phi_assumptions;
 
     // Trace a value back through Add/Sub/Assign chains to see if it's stack-relative.
     [[nodiscard]] std::optional<i64> stack_offset(const IrValue& v, int depth = 0) const;

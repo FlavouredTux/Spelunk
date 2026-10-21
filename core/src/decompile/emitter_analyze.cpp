@@ -903,6 +903,20 @@ void Emitter::name_merge_values() {
         }
     }
 
+    // A stack pointer whose paths agree on its offset from entry addresses
+    // the frame; it is not a value the source declared. Frame pointers stay
+    // eligible: optimized code reuses RBP as an ordinary register.
+    std::set<SsaKey> stack_pointer_phis;
+    for (const auto& [key, phi] : phi_defs) {
+        if (phi->dst.kind != IrValueKind::Reg) continue;
+        const Reg canon = canonical_reg(phi->dst.reg);
+        if (canon != Reg::Rsp && canon != Reg::PpcR1 && canon != Reg::Xsp &&
+            canon != Reg::Asp) {
+            continue;
+        }
+        if (entry_stack_offset(phi->dst)) stack_pointer_phis.insert(key);
+    }
+
     SsaMergeLocalRecoveryCallbacks callbacks;
     // Call-argument intrinsics are hidden from ordinary statement-use
     // counts, but a Phi consumed only by a call still needs a source
@@ -910,6 +924,7 @@ void Emitter::name_merge_values() {
     // uses for merge recovery while retaining the lean visible-use map
     // everywhere else.
     callbacks.use_count = [&](const SsaKey& k) {
+        if (stack_pointer_phis.contains(k)) return 0u;
         // A cloned return can read a phi's incoming value directly. Count
         // that use before coalescing the feeder into the merge local.
         if (!is_ppc_abi()) return use_count_by_key(k) +

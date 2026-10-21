@@ -18,6 +18,8 @@ namespace spelunk {
 Result<std::unique_ptr<Decoder>>
 make_decoder(const Binary& b) {
     switch (b.arch()) {
+        case Arch::X86:
+            return std::unique_ptr<Decoder>(std::make_unique<X64Decoder>(false));
         case Arch::X86_64:
             return std::unique_ptr<Decoder>(std::make_unique<X64Decoder>());
         case Arch::Ppc32:

@@ -109,8 +109,35 @@ decode_modrm_rm(Context& ctx, unsigned size, bool mem_only) noexcept {
     Mem m;
     m.size    = static_cast<u8>(size);
     m.segment = ctx.prefix.segment;
-    const unsigned address_size = ctx.prefix.addrsize ? 4u : 8u;
+    const unsigned address_size = ctx.address_size();
     m.address_size = static_cast<u8>(address_size);
+
+    if (address_size == 2) {
+        constexpr Reg bases[8] = {Reg::Bx, Reg::Bx, Reg::Bp, Reg::Bp,
+                                  Reg::Si, Reg::Di, Reg::Bp, Reg::Bx};
+        constexpr Reg indices[8] = {Reg::Si, Reg::Di, Reg::Si, Reg::Di,
+                                    Reg::None, Reg::None, Reg::None, Reg::None};
+        m.base = bases[rm];
+        m.index = indices[rm];
+        if (mod == 0 && rm == 6) {
+            auto d = ctx.read_le<u16>();
+            if (!d) return std::unexpected(std::move(d).error());
+            m.base = Reg::None;
+            m.disp = *d;
+            m.has_disp = true;
+        } else if (mod == 1) {
+            auto d = ctx.read_u8();
+            if (!d) return std::unexpected(std::move(d).error());
+            m.disp = static_cast<i8>(*d);
+            m.has_disp = true;
+        } else if (mod == 2) {
+            auto d = ctx.read_le<u16>();
+            if (!d) return std::unexpected(std::move(d).error());
+            m.disp = static_cast<i16>(*d);
+            m.has_disp = true;
+        }
+        return Operand::make_mem(m);
+    }
 
     if (rm == 4) {
         auto sib_r = ctx.read_u8();
@@ -130,7 +157,7 @@ decode_modrm_rm(Context& ctx, unsigned size, bool mem_only) noexcept {
         if (mod == 0 && base_bits == 5) {
             auto d = ctx.read_le<u32>();
             if (!d) return std::unexpected(std::move(d).error());
-            m.disp = ctx.prefix.addrsize
+            m.disp = address_size == 4
                 ? static_cast<i64>(*d)
                 : static_cast<i64>(static_cast<i32>(*d));
             m.has_disp = true;
@@ -140,8 +167,8 @@ decode_modrm_rm(Context& ctx, unsigned size, bool mem_only) noexcept {
     } else if (mod == 0 && rm == 5) {
         auto d = ctx.read_le<u32>();
         if (!d) return std::unexpected(std::move(d).error());
-        m.base = ctx.prefix.addrsize ? Reg::None : Reg::Rip;
-        m.disp = ctx.prefix.addrsize
+        m.base = address_size == 4 ? Reg::None : Reg::Rip;
+        m.disp = address_size == 4
             ? static_cast<i64>(*d)
             : static_cast<i64>(static_cast<i32>(*d));
         m.has_disp = true;
@@ -236,6 +263,7 @@ decode_rel(Context& ctx, unsigned size, addr_t insn_addr) noexcept {
     r.offset = off;
     r.size   = static_cast<u8>(size);
     r.target = insn_addr + static_cast<u64>(ctx.pos) + static_cast<u64>(off);
+    if (!ctx.mode64) r.target &= size == 2 ? 0xffffu : 0xffffffffu;
     return Operand::make_rel(r);
 }
 
@@ -301,7 +329,20 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
         case OpSpec::Jb: return decode_rel(ctx, 1, insn_addr);
         // Near branches in 64-bit mode always carry rel32. 0x66 does not
         // shrink the displacement to rel16.
-        case OpSpec::Jz: return decode_rel(ctx, 4, insn_addr);
+        case OpSpec::Jz: return decode_rel(ctx, !ctx.mode64 && ctx.prefix.opsize ? 2u : 4u, insn_addr);
+
+        case OpSpec::Ob:
+        case OpSpec::Ov: {
+            auto address = read_imm(ctx, ctx.address_size(), 0, false);
+            if (!address) return std::unexpected(std::move(address).error());
+            Mem m;
+            m.size = static_cast<u8>(spec == OpSpec::Ob ? 1u : os);
+            m.address_size = static_cast<u8>(ctx.address_size());
+            m.segment = ctx.prefix.segment;
+            m.disp = address->value;
+            m.has_disp = true;
+            return Operand::make_mem(m);
+        }
 
         case OpSpec::AL:  return Operand::make_reg(Reg::Al);
         case OpSpec::CL:  return Operand::make_reg(Reg::Cl);

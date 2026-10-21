@@ -147,7 +147,8 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     }
 
     Context ctx;
-    ctx.code = code;
+    ctx.code = code.first(std::min<std::size_t>(code.size(), 15));
+    ctx.mode64 = mode64_;
 
     while (!ctx.eof()) {
         const u8 b = static_cast<u8>(ctx.code[ctx.pos]);
@@ -161,7 +162,10 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
 
     if (!ctx.eof()) {
         const u8 b = static_cast<u8>(ctx.code[ctx.pos]);
-        if (b == 0xC5) {
+        const bool vector_prefix = ctx.mode64 ||
+            (ctx.pos + 1 < ctx.code.size() &&
+             (static_cast<u8>(ctx.code[ctx.pos + 1]) & 0xc0u) == 0xc0u);
+        if (b == 0xC5 && vector_prefix) {
             ++ctx.pos;
             auto p1 = ctx.read_u8();
             if (!p1) return std::unexpected(std::move(p1).error());
@@ -173,7 +177,7 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                 (static_cast<u8>(~*p1) >> 3) & 0x0fu);
             ctx.vector_bytes = (*p1 & 0x04u) ? 32u : 16u;
             ctx.vex_pp = static_cast<u8>(*p1 & 0x03u);
-        } else if (b == 0xC4) {
+        } else if (b == 0xC4 && vector_prefix) {
             ++ctx.pos;
             auto p0 = ctx.read_u8();
             auto p1 = ctx.read_u8();
@@ -190,7 +194,7 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                 (static_cast<u8>(~*p1) >> 3) & 0x0fu);
             ctx.vector_bytes = (*p1 & 0x04u) ? 32u : 16u;
             ctx.vex_pp = static_cast<u8>(*p1 & 0x03u);
-        } else if (b == 0x62) {
+        } else if (b == 0x62 && vector_prefix) {
             ++ctx.pos;
             auto p0 = ctx.read_u8();
             auto p1 = ctx.read_u8();
@@ -223,7 +227,7 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             ctx.vector_mask = static_cast<u8>(*p2 & 0x07u);
             ctx.vector_zeroing = (*p2 & 0x80u) != 0;
             ctx.vector_broadcast = (*p2 & 0x10u) != 0;
-        } else if ((b & 0xF0) == 0x40) {
+        } else if (ctx.mode64 && (b & 0xF0) == 0x40) {
             ctx.rex_present = true;
             ctx.rex_w = (b & 0x8) != 0;
             ctx.rex_r = (b & 0x4) != 0;
@@ -241,6 +245,7 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         return candidate.mnemonic != Mnemonic::Invalid || candidate.group != 0;
     };
     const OpcodeEntry* entry = nullptr;
+    OpcodeEntry legacy_entry;
     if (ctx.vex || ctx.evex) {
         if (ctx.vex_map == 1 && opcode == 0x77 && ctx.vex_pp == 0) {
             entry = &kVzeroupper;
@@ -316,6 +321,13 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             return decode_x87_escape(ctx, addr);
         }
         entry = &kPrimary[opcode];
+        if (!ctx.mode64 && opcode >= 0x40 && opcode <= 0x4f) {
+            legacy_entry.mnemonic = opcode < 0x48 ? Mnemonic::Inc : Mnemonic::Dec;
+            legacy_entry.op1 = OpSpec::Zv;
+            entry = &legacy_entry;
+        } else if (!ctx.mode64 && opcode == 0x63) {
+            return std::unexpected(Error::not_implemented("x86: ARPL is not implemented"));
+        }
     }
 
     if (!entry || (entry->mnemonic == Mnemonic::Invalid && entry->group == 0)) {
@@ -383,7 +395,7 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     insn.x86_vector_bits = ctx.vector_bytes == 64 ? 3u
         : (ctx.vector_bytes == 32 ? 2u : 1u);
 
-    ctx.default_64 = is_default_64(entry->mnemonic);
+    ctx.default_64 = ctx.mode64 && is_default_64(entry->mnemonic);
 
     const OpSpec specs[4] = {entry->op1, entry->op2, entry->op3, entry->op4};
     for (std::size_t i = 0; i < 4; ++i) {

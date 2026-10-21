@@ -21,7 +21,7 @@ enum class OpSpec : u8 {
     Ib, Iw, Iz, Iv,
     Ibsext,
     Jb, Jz,
-    AL, RAX, CL,
+    AL, RAX, CL, Ob, Ov,
     One,
     Zb, Zv,
     // SSE xmm register from ModR/M.reg field (with REX.R extension).
@@ -71,6 +71,7 @@ struct Context {
     bool vector_zeroing = false;
     bool vector_broadcast = false;
     bool default_64 = false;
+    bool mode64 = true;
     u8 opcode = 0;
     u8 opcode_low3 = 0;
     u8 modrm = 0;
@@ -82,6 +83,10 @@ struct Context {
         if (rex_w) return 8;
         if (prefix.opsize) return 2;
         return 4;
+    }
+    [[nodiscard]] unsigned address_size() const noexcept {
+        return mode64 ? (prefix.addrsize ? 4u : 8u)
+                      : (prefix.addrsize ? 2u : 4u);
     }
 
     [[nodiscard]] Result<u8> read_u8() noexcept {

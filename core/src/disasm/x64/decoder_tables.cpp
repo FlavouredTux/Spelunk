@@ -101,6 +101,10 @@ constexpr std::array<OpcodeEntry, 256> build_primary() noexcept {
     // String ops: no explicit operands (implicit rdi/rsi/rcx/rax, direction
     // flag). The "w"-sized (0x66-prefixed) variants aren't emitted; the -b
     // / default / -q variants cover the vast majority of real code.
+    t[0xA0] = op(Mnemonic::Mov, OpSpec::AL, OpSpec::Ob);
+    t[0xA1] = op(Mnemonic::Mov, OpSpec::RAX, OpSpec::Ov);
+    t[0xA2] = op(Mnemonic::Mov, OpSpec::Ob, OpSpec::AL);
+    t[0xA3] = op(Mnemonic::Mov, OpSpec::Ov, OpSpec::RAX);
     t[0xA4] = op(Mnemonic::Movsb);
     t[0xA5] = op(Mnemonic::Movsd);   // promote to Movsq when REX.W
     t[0xA6] = op(Mnemonic::Cmpsb);

@@ -491,6 +491,37 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         });
     auto bindings_after_then = emitted_bindings;
     emitted_bindings = bindings_before_children;
+    // Early-return collapse: when the then arm always exits (last statement
+    // is `return …;` or `goto …;`), the else arm is unreachable AFTER the
+    // if, so we can drop the `else` wrapper and let the else body run at
+    // the surrounding indent. Cascaded across nested if/elses this turns
+    // a goto-fail ladder back into an early-return chain - the same shape
+    // the user originally wrote. Render the else only at the outer depth:
+    // also rendering it nested doubles the work at every rung of the ladder.
+    if (r.children.size() > 1 && r.children[0] && r.children[1] &&
+        region_always_exits(*r.children[0]) &&
+        !rendered_region_empty(then_buf.text())) {
+        const std::string cond = render_condition(r.condition, r.invert);
+        emit_materializations_for_rendered_value(r.condition, cond, out, ind);
+        auto else_outer = RenderChunk::capture(
+            options.line_map, [&](std::string& text) {
+                emit_region(*r.children[1], depth, text);
+            });
+        const auto bindings_after_else_outer = emitted_bindings;
+        emitted_bindings = bindings_before_children;
+        append_if_opening(*this, r.condition, cond, ind, out);
+        std::move(then_buf).append_to(out);
+        emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
+        out += std::format("{}}}\n", ind);
+        if (rendered_region_empty(else_outer.text())) {
+            else_outer.discard();
+            return;
+        }
+        std::move(else_outer).append_to(out);
+        emitted_bindings.insert(bindings_after_else_outer.begin(),
+                               bindings_after_else_outer.end());
+        return;
+    }
     auto else_buf = RenderChunk::capture(
         options.line_map, [&](std::string& text) {
             if (r.children.size() > 1) {
@@ -517,13 +548,8 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
     }
     const std::string cond = render_condition(r.condition, invert_effective);
     emit_materializations_for_rendered_value(r.condition, cond, out, ind);
-    // Early-return collapse: when the then arm always exits (last statement
-    // is `return …;` or `goto …;`), the else arm is unreachable AFTER the
-    // if, so we can drop the `else` wrapper and let the else body run at
-    // the surrounding indent. Cascaded across nested if/elses this turns
-    // a goto-fail ladder back into an early-return chain - the same shape
-    // the user originally wrote. Re-emit the else at the outer depth so
-    // the indentation matches the new flat layout.
+    // An empty then arm swapped the else into it above; the collapse still
+    // keys off the original then region.
     if (r.children.size() > 1 && r.children[0] && r.children[1] &&
         region_always_exits(*r.children[0])) {
         const auto bindings_before_else_outer = emitted_bindings;

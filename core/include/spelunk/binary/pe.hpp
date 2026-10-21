@@ -140,6 +140,7 @@ private:
         u64         image_base;
         u32         size_of_image;
         u32         entry_rva;
+        std::size_t data_dir_offset;
     };
     [[nodiscard]] Result<ParsedHeaders> parse_headers();
     [[nodiscard]] Result<void>          parse_sections(const ParsedHeaders& h);

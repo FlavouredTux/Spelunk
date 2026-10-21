@@ -25,7 +25,6 @@ constexpr std::size_t kDdDelayImport = 13;
 constexpr std::size_t kImportDescSize      = 20;
 constexpr std::size_t kDelayImportDescSize = 32;
 constexpr u32         kDelayAttrRvaBased   = 0x1;
-constexpr u64         kOrdinalFlagBit      = 0x8000'0000'0000'0000ULL;
 constexpr std::size_t kExportDirSize       = 40;
 
 [[nodiscard]] bool rva_range_fits(u32 start, u32 size) noexcept {
@@ -45,17 +44,20 @@ Result<void> collect_thunks(
     const Binary& bin, addr_t image_base, u32 int_rva, u32 iat_rva,
     std::vector<Symbol>& out,
     std::unordered_map<addr_t, std::string>* got_to_name,
-    bool iat_is_name_fallback) {
+    bool iat_is_name_fallback, std::string_view library) {
     const auto int_bytes = bytes_at_rva(bin, image_base, int_rva);
     const auto iat_bytes = bytes_at_rva(bin, image_base, iat_rva);
+    const std::size_t word = arch_pointer_bits(bin.arch()) == 32 ? 4u : 8u;
+    const u64 ordinal_flag = u64{1} << (word * 8 - 1);
     const std::size_t available =
-        std::min(int_bytes.size(), iat_bytes.size()) / 8;
+        std::min(int_bytes.size(), iat_bytes.size()) / word;
     constexpr std::size_t kMaxImportSymbols = 1u << 20;
     const std::size_t count = std::min(available, kMaxImportSymbols);
 
     for (std::size_t index = 0; index < count; ++index) {
-        const std::size_t offset = index * 8;
-        const u64 thunk = read_le_at<u64>(int_bytes.data() + offset);
+        const std::size_t offset = index * word;
+        const u64 thunk = word == 4 ? read_le_at<u32>(int_bytes.data() + offset)
+                                   : read_le_at<u64>(int_bytes.data() + offset);
         if (thunk == 0) return {};
 
         const auto slot_rva = add_rva(iat_rva, offset);
@@ -68,11 +70,11 @@ Result<void> collect_thunks(
         Symbol symbol;
         symbol.kind = SymbolKind::Function;
         symbol.is_import = true;
+        symbol.import_library = library;
         symbol.got_addr = image_base + *slot_rva;
 
-        if ((thunk & kOrdinalFlagBit) != 0) {
-            constexpr u64 kOrdinalPayloadMask = 0x7fffffffffff0000ull;
-            if ((thunk & kOrdinalPayloadMask) != 0) {
+        if ((thunk & ordinal_flag) != 0) {
+            if ((thunk & (ordinal_flag - 1) & ~u64{0xffff}) != 0) {
                 if (iat_is_name_fallback) return {};
                 return std::unexpected(Error::invalid_format(
                     "pe: import ordinal thunk has reserved bits set"));
@@ -157,7 +159,7 @@ collect_imports(const Binary& bin,
         const u32 int_rva = (oft_rva != 0) ? oft_rva : iat_rva;
         if (auto result = collect_thunks(
                 bin, image_base, int_rva, iat_rva, out, got_to_name,
-                oft_rva == 0);
+                oft_rva == 0, cstr_at_rva(bin, image_base, name_rva));
             !result) {
             return result;
         }
@@ -219,7 +221,7 @@ collect_delay_imports(const Binary& bin,
 
         if (auto result = collect_thunks(
                 bin, image_base, int_rva, iat_rva, out, got_to_name,
-                false);
+                false, cstr_at_rva(bin, image_base, name_rva));
             !result) {
             return result;
         }

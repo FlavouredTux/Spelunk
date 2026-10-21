@@ -105,6 +105,9 @@ struct Symbol {
     // the resolved target. 0 for non-imports or if no matching relocation
     // was found.
     addr_t      got_addr  = 0;
+    // PE import descriptor's DLL name, retained for per-function x86 ABI
+    // decisions (WinAPI stdcall versus CRT cdecl).
+    std::string import_library{};
 };
 
 }  // namespace spelunk

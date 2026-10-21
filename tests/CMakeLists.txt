@@ -3311,9 +3311,9 @@ if(Python3_Interpreter_FOUND)
     set(SPELUNK_FIXTURE_pe32_bad_PATH "${_pe32_bad}")
 
     spelunk_expect_fail_test(
-        NAME       pe32_rejected
+        NAME       pe32_machine_mismatch_rejected
         FIXTURE    pe32_bad
-        ERR_SUBSTR "PE32 (32-bit) not supported"
+        ERR_SUBSTR "is incompatible with PE32"
     )
 
     # ---- minidump_tiny (hand-built MS minidump: header, SystemInfo,

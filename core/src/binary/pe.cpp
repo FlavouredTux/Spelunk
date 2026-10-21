@@ -64,6 +64,12 @@ constexpr std::size_t kOptSizeOfImageOff      = 0x38;
 constexpr std::size_t kOptNumRvaAndSizesOff   = 0x6C;
 constexpr std::size_t kOptDataDirOff          = 0x70;
 
+// PE32 IMAGE_OPTIONAL_HEADER32: BaseOfData and the 32-bit ImageBase move
+// every field after them. Magic, entry and SizeOfImage are shared.
+constexpr std::size_t kOpt32ImageBaseOff      = 0x1C;
+constexpr std::size_t kOpt32NumRvaAndSizesOff = 0x5C;
+constexpr std::size_t kOpt32DataDirOff        = 0x60;
+
 // Machine types we care about.
 constexpr u16 kMachineI386  = 0x014c;
 constexpr u16 kMachineAmd64 = 0x8664;
@@ -86,6 +92,7 @@ constexpr std::size_t kDdTls         = 9;
 
 constexpr std::size_t kBaseRelocBlockSize   = 8;
 constexpr u16         kRelocTypeAbsolute    = 0;
+constexpr u16         kRelocTypeHighLow     = 3;
 constexpr u16         kRelocTypeDir64       = 10;
 
 [[nodiscard]] Arch arch_from_machine(u16 m) noexcept {
@@ -183,31 +190,35 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
     auto opt = r.slice(opt_off, opt_size);
     if (!opt) return std::unexpected(std::move(opt).error());
 
-    if (opt_size < kOptDataDirOff) {
-        return std::unexpected(Error::truncated(std::format(
-            "pe: optional header size {:#x} < {:#x}", opt_size, kOptDataDirOff)));
-    }
+    if (opt_size < 2) return std::unexpected(Error::truncated("pe: missing optional header magic"));
 
     const u16 opt_magic = read_le_at<u16>(opt->data() + kOptMagicOff);
-    if (opt_magic == kOptMagicPe32) {
-        return std::unexpected(Error::unsupported(
-            "pe: PE32 (32-bit) not supported - PE32+ only"));
-    }
-    if (opt_magic != kOptMagicPe32Plus) {
+    const bool pe32 = opt_magic == kOptMagicPe32;
+    if (!pe32 && opt_magic != kOptMagicPe32Plus) {
         return std::unexpected(Error::invalid_format(std::format(
             "pe: unknown optional header magic {:#x}", opt_magic)));
     }
-    if (arch_ != Arch::X86_64 && arch_ != Arch::Arm64) {
+    if ((pe32 && arch_ != Arch::X86) ||
+        (!pe32 && arch_ != Arch::X86_64 && arch_ != Arch::Arm64)) {
         return std::unexpected(Error::unsupported(std::format(
-            "pe: machine type {:#x} is incompatible with PE32+", machine)));
+            "pe: machine type {:#x} is incompatible with {}", machine,
+            pe32 ? "PE32" : "PE32+")));
+    }
+    const std::size_t dir_offset = pe32 ? kOpt32DataDirOff : kOptDataDirOff;
+    if (opt_size < dir_offset) {
+        return std::unexpected(Error::truncated(std::format(
+            "pe: optional header size {:#x} < {:#x}", opt_size, dir_offset)));
     }
 
     const u32 entry_rva  = read_le_at<u32>(opt->data() + kOptAddressOfEntryOff);
-    const u64 image_base = read_le_at<u64>(opt->data() + kOptImageBaseOff);
+    const u64 image_base = pe32 ? read_le_at<u32>(opt->data() + kOpt32ImageBaseOff)
+                              : read_le_at<u64>(opt->data() + kOptImageBaseOff);
     const u32 size_of_image = read_le_at<u32>(
         opt->data() + kOptSizeOfImageOff);
-    const u32 num_rva    = read_le_at<u32>(opt->data() + kOptNumRvaAndSizesOff);
+    const u32 num_rva    = read_le_at<u32>(
+        opt->data() + (pe32 ? kOpt32NumRvaAndSizesOff : kOptNumRvaAndSizesOff));
     if (size_of_image == 0 ||
+        (pe32 && image_base + size_of_image > (u64{1} << 32)) ||
         size_of_image > std::numeric_limits<addr_t>::max() - image_base) {
         return std::unexpected(Error::invalid_format(
             "pe: SizeOfImage is zero or overflows the virtual address space"));
@@ -230,6 +241,7 @@ Result<PeBinary::ParsedHeaders> PeBinary::parse_headers() {
         .image_base        = image_base,
         .size_of_image     = size_of_image,
         .entry_rva         = entry_rva,
+        .data_dir_offset   = dir_offset,
     };
 }
 
@@ -408,14 +420,14 @@ Result<void> PeBinary::parse() {
     // this at 16 in practice but the field is u32 - trust the header size,
     // not the count.
     const std::size_t dd_capacity =
-        (hdrs->opt_size > kOptDataDirOff)
-            ? (hdrs->opt_size - kOptDataDirOff) / kDataDirEntry
+        (hdrs->opt_size > hdrs->data_dir_offset)
+            ? (hdrs->opt_size - hdrs->data_dir_offset) / kDataDirEntry
             : 0;
     const std::size_t dd_count =
         std::min<std::size_t>(hdrs->num_rva_and_sizes, dd_capacity);
 
     const ByteReader r(buffer_);
-    const std::size_t dd_off = hdrs->opt_off + kOptDataDirOff;
+    const std::size_t dd_off = hdrs->opt_off + hdrs->data_dir_offset;
     data_dirs_.reserve(dd_count);
     for (std::size_t i = 0; i < dd_count; ++i) {
         const std::size_t p = dd_off + i * kDataDirEntry;
@@ -457,32 +469,36 @@ Result<void> PeBinary::parse_tls_callbacks() {
     if (data_dirs_.size() <= kDdTls) return {};
     const auto& dd = data_dirs_[kDdTls];
     if (dd.size == 0 || dd.virtual_address == 0) return {};
-    if (!rva_is_mapped(dd.virtual_address, 40)) return {};
+    const std::size_t word = arch_ == Arch::X86 ? 4u : 8u;
+    const std::size_t tls_size = word == 4 ? 24u : 40u;
+    if (!rva_is_mapped(dd.virtual_address, tls_size)) return {};
 
-    // IMAGE_TLS_DIRECTORY64 fields we use:
-    //   +0x18: AddressOfCallBacks (u64 absolute VA → NULL-terminated u64[])
+    // IMAGE_TLS_DIRECTORY64 / IMAGE_TLS_DIRECTORY32 fields we use:
+    //   +0x18 / +0x0c: AddressOfCallBacks (absolute VA → NULL-terminated
+    //   array of pointer-sized entries)
     // Other fields (StartAddressOfRawData, AddressOfIndex, SizeOfZeroFill,
     // Characteristics) describe the TLS data slot itself, which static
     // analysis doesn't act on.
     const auto tls = bytes_at_rva(dd.virtual_address);
-    if (tls.size() < 40) return {};
+    if (tls.size() < tls_size) return {};
 
-    const u64 cb_array_va = read_le_at<u64>(tls.data() + 0x18);
+    const u64 cb_array_va = word == 4 ? read_le_at<u32>(tls.data() + 0x0c)
+                                     : read_le_at<u64>(tls.data() + 0x18);
     if (cb_array_va == 0) return {};
 
-    // Walk callback array. Each entry is an absolute VA on PE+, terminated
+    // Walk callback array. Each entry is an absolute VA, terminated
     // by a zero entry. Cap at 256 to avoid a runaway loop on a corrupt
     // TLS directory pointing into junk.
     constexpr std::size_t kMaxCallbacks = 256;
     for (std::size_t i = 0; i < kMaxCallbacks; ++i) {
-        const std::size_t offset = i * 8;
+        const std::size_t offset = i * word;
         if (offset > std::numeric_limits<addr_t>::max() - cb_array_va) {
             return std::unexpected(Error::invalid_format(
                 "pe: TLS callback array address overflows"));
         }
         const auto slot = bytes_at(cb_array_va + offset);
-        if (slot.size() < 8) break;
-        const u64 cb = read_le_at<u64>(slot.data());
+        if (slot.size() < word) break;
+        const u64 cb = word == 4 ? read_le_at<u32>(slot.data()) : read_le_at<u64>(slot.data());
         if (cb == 0) break;
         if (bytes_at(static_cast<addr_t>(cb)).empty()) continue;
 
@@ -523,7 +539,8 @@ Result<void> PeBinary::parse_exports() {
 
 std::map<addr_t, addr_t> PeBinary::relocated_qwords() const {
     std::map<addr_t, addr_t> out;
-    if (arch_ != Arch::X86_64) return out;
+    if (arch_ != Arch::X86_64 && arch_ != Arch::X86) return out;
+    const bool pe32 = arch_ == Arch::X86;
     if (data_dirs_.size() <= kDdBaseReloc) return out;
     const auto& dd = data_dirs_[kDdBaseReloc];
     if (dd.size == 0 || dd.virtual_address == 0) return out;
@@ -555,14 +572,14 @@ std::map<addr_t, addr_t> PeBinary::relocated_qwords() const {
             const u16 type = static_cast<u16>(raw >> 12);
             const u16 off  = static_cast<u16>(raw & 0x0fffu);
             if (type == kRelocTypeAbsolute) continue;
-            if (type != kRelocTypeDir64) continue;
+            if (type != (pe32 ? kRelocTypeHighLow : kRelocTypeDir64)) continue;
 
             const u64 slot_rva_wide = static_cast<u64>(page_rva) + off;
             if (slot_rva_wide > std::numeric_limits<u32>::max()) continue;
             const u32 slot_rva = static_cast<u32>(slot_rva_wide);
             const auto slot = bytes_at_rva(slot_rva);
-            if (slot.size() < 8) continue;
-            const u64 target = read_le_at<u64>(slot.data());
+            if (slot.size() < (pe32 ? 4u : 8u)) continue;
+            const u64 target = pe32 ? read_le_at<u32>(slot.data()) : read_le_at<u64>(slot.data());
             if (target == 0) continue;
             if (slot_rva <=
                 std::numeric_limits<addr_t>::max() - image_base_) {
@@ -591,10 +608,10 @@ std::map<addr_t, addr_t> PeBinary::relocated_qwords() const {
 // fewer decode calls than the naive walk.
 void PeBinary::scan_iat_thunks(
     const std::unordered_map<addr_t, std::string>& got_to_name) {
-    if (got_to_name.empty() || arch_ != Arch::X86_64) return;
+    if (got_to_name.empty() || (arch_ != Arch::X86_64 && arch_ != Arch::X86)) return;
 
     std::unordered_map<std::string, addr_t> stub_by_name;
-    const X64Decoder dec;
+    const X64Decoder dec(arch_ == Arch::X86_64);
 
     constexpr std::byte kFF{0xFF};
     constexpr std::byte k25{0x25};
@@ -624,11 +641,12 @@ void PeBinary::scan_iat_thunks(
             }
             const Operand& op = insn.operands[0];
             if (op.kind != Operand::Kind::Memory) continue;
-            if (op.mem.base != Reg::Rip) continue;
+            if (op.mem.base != (arch_ == Arch::X86 ? Reg::None : Reg::Rip)) continue;
             if (op.mem.index != Reg::None) continue;
             if (!op.mem.has_disp) continue;
-            const addr_t got = ip + insn.length +
-                               static_cast<addr_t>(op.mem.disp);
+            const addr_t got = arch_ == Arch::X86
+                ? static_cast<u32>(op.mem.disp)
+                : ip + insn.length + static_cast<addr_t>(op.mem.disp);
             auto it = got_to_name.find(got);
             if (it == got_to_name.end()) continue;
             // First thunk wins for a given name - MSVC can emit

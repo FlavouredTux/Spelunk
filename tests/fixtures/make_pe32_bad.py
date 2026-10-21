@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Emit a tiny malformed-for-Spelunk PE32 image.
+"""Emit a tiny malformed PE32 image.
 
-The file is structurally PE, but uses the PE32 optional-header magic so
-the loader must reject it with the explicit PE32+ only error.
+The file is structurally PE and uses the PE32 optional-header magic, but
+names an x86-64 machine, which only PE32+ can describe. The loader must
+reject the mismatch rather than guess a pointer width.
 """
 
 import struct
@@ -19,7 +20,7 @@ def main() -> int:
     struct.pack_into("<I", dos, 0x3C, 0x40)
 
     coff = struct.pack("<HHIIIHH",
-                       0x14C,  # i386
+                       0x8664,  # AMD64, which requires PE32+
                        1,
                        0, 0, 0,
                        0xE0,

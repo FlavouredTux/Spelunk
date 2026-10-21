@@ -20,6 +20,8 @@ Result<std::unique_ptr<Lifter>>
 make_lifter(const Binary& b) {
     const Abi abi = abi_for(b.format(), b.arch(), b.endian());
     switch (b.arch()) {
+        case Arch::X86:
+            return std::unique_ptr<Lifter>(std::make_unique<X64Lifter>(abi, &b));
         case Arch::X86_64:
             return std::unique_ptr<Lifter>(std::make_unique<X64Lifter>(abi));
         case Arch::Ppc32:

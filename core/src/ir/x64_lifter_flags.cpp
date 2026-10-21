@@ -83,25 +83,25 @@ void restore_rflags_value(LiftCtx& ctx, IrValue rflags) {
 void lift_pushf(LiftCtx& ctx) {
     IrValue rflags = build_rflags_value(ctx);
     IrValue rsp = ctx.reg(Reg::Rsp);
-    IrValue new_rsp = ctx.emit_binop(IrOp::Sub, rsp, ctx.imm(8, IrType::I64));
-    ctx.emit_store(new_rsp, rflags);
+    IrValue new_rsp = ctx.emit_binop(IrOp::Sub, rsp, ctx.imm(ctx.word_size(), ctx.word_type()));
+    ctx.emit_store(new_rsp, ctx.match_size(rflags, ctx.word_type(), false));
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
 }
 
 void lift_popf(LiftCtx& ctx) {
     IrValue rsp = ctx.reg(Reg::Rsp);
-    IrValue rflags = ctx.emit_load(rsp, IrType::I64);
-    IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp, ctx.imm(8, IrType::I64));
+    IrValue rflags = ctx.emit_load(rsp, ctx.word_type());
+    IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp, ctx.imm(ctx.word_size(), ctx.word_type()));
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
-    restore_rflags_value(ctx, rflags);
+    restore_rflags_value(ctx, ctx.match_size(rflags, IrType::I64, false));
 }
 
 void lift_leave(LiftCtx& ctx) {
     IrValue rbp = ctx.reg(Reg::Rbp);
     ctx.emit_assign(ctx.reg(Reg::Rsp), rbp);
     IrValue rsp = ctx.reg(Reg::Rsp);
-    IrValue val = ctx.emit_load(rsp, IrType::I64);
-    IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp, ctx.imm(8, IrType::I64));
+    IrValue val = ctx.emit_load(rsp, ctx.word_type());
+    IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp, ctx.imm(ctx.word_size(), ctx.word_type()));
     ctx.emit_assign(ctx.reg(Reg::Rbp), val);
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
 }

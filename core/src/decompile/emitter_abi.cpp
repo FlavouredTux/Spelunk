@@ -146,7 +146,7 @@ declared_integer_type(std::string_view type, Abi abi) noexcept {
         }
 
         const unsigned pointer_bits =
-            abi == Abi::Ppc32Sysv || abi == Abi::AapcsArm32 ? 32u : 64u;
+            is_x86_32_abi(abi) || abi == Abi::Ppc32Sysv || abi == Abi::AapcsArm32 ? 32u : 64u;
         if (words.front() == "size_t" || words.front() == "uintptr_t" ||
             words.front() == "std::size_t" ||
             words.front() == "std::uintptr_t") {
@@ -182,7 +182,7 @@ declared_integer_type(std::string_view type, Abi abi) noexcept {
     } else if (long_count >= 2) {
         bits = 64;
     } else if (long_count == 1) {
-        bits = (abi == Abi::Win64 || abi == Abi::Ppc32Sysv ||
+        bits = (is_x86_32_abi(abi) || abi == Abi::Win64 || abi == Abi::Ppc32Sysv ||
                 abi == Abi::AapcsArm32)
             ? 32u : 64u;
     } else if (!has("int") && !is_unsigned && !explicitly_signed) {
@@ -649,7 +649,7 @@ Emitter::abi_layout_for(const FunctionSig& sig) const {
     std::size_t slot = 0;
     i64 ppc_cursor = is_ppc_abi() ? ppc_parameter_area_base() : 0;
     const i64 stack_word = abi_word_type() == IrType::I32 ? 4 : 8;
-    i64 stack_cursor = abi == Abi::SysVAmd64 ? 8 : 0;
+    i64 stack_cursor = is_x86_32_abi(abi) ? 4 : (abi == Abi::SysVAmd64 ? 8 : 0);
     if (hidden_sret) {
         (void)ppc_advance_parameter_slot(ppc_cursor, abi_word_type());
     }
@@ -695,7 +695,7 @@ Emitter::abi_layout_for(const FunctionSig& sig) const {
             } else {
                 const i64 value_size = std::max<i64>(
                     stack_word, static_cast<i64>(type_bits(ir_type) / 8u));
-                const i64 alignment = std::min<i64>(value_size, 8);
+                const i64 alignment = std::min<i64>(value_size, is_x86_32_abi(abi) ? 4 : 8);
                 stack_cursor = (stack_cursor + alignment - 1) /
                                alignment * alignment;
                 stack_slot = stack_cursor;
@@ -731,6 +731,7 @@ Emitter::abi_layout_for_import(std::string_view name) const {
     }
     std::vector<InferredArgument> result;
     result.reserve(std::min<std::size_t>(spec->params.size(), kMaxAbiArgs));
+    i64 x86_stack = 4;
     for (std::size_t slot = 0;
          slot < spec->params.size() && result.size() < kMaxAbiArgs; ++slot) {
         const TypeRef type = spec->params[slot];
@@ -765,6 +766,16 @@ Emitter::abi_layout_for_import(std::string_view name) const {
             ? ppc_advance_parameter_slot(ppc_cursor, ir_type, aggregate_size)
             : 0;
         if (is_ppc_abi() && reg == Reg::None) stack_slot = ppc_slot;
+        if (is_x86_32_abi(abi)) {
+            // Imported C/WinAPI prototypes use stack arguments unless the
+            // symbol explicitly identifies a register convention.
+            reg = Reg::None;
+            stack_slot = x86_stack;
+            const auto& node = arena.node(type);
+            const i64 bytes = arena.kind(type) == TypeKind::Float ? node.f.bits / 8
+                : arena.kind(type) == TypeKind::Int ? node.i.bits / 8 : 4;
+            x86_stack += (std::max<i64>(4, bytes) + 3) / 4 * 4;
+        }
         result.push_back({reg, ir_type, false, stack_slot,
                           static_cast<u8>(int_words), aggregate_size,
                           aggregate_size != 0 ? arena.node(type).s.name
@@ -831,7 +842,7 @@ Emitter::arg_name_for_live_in(Reg r) const {
 }
 
 IrType Emitter::abi_word_type() const noexcept {
-    return (abi == Abi::Ppc32Sysv || abi == Abi::AapcsArm32)
+    return (is_x86_32_abi(abi) || abi == Abi::Ppc32Sysv || abi == Abi::AapcsArm32)
         ? IrType::I32 : IrType::I64;
 }
 

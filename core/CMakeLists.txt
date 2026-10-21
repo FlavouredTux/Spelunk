@@ -43,6 +43,7 @@ add_library(spelunk_core STATIC
     src/analysis/cfg_builder_flow.cpp
     src/analysis/cfg_util.cpp
     src/analysis/arity.cpp
+    src/analysis/x86.cpp
     src/analysis/syscalls.cpp
     src/analysis/strings.cpp
     src/analysis/string_names.cpp
@@ -101,6 +102,7 @@ add_library(spelunk_core STATIC
     src/ir/ppc_lifter_operands.cpp
     src/ir/ppc_lifter_ps.cpp
     src/ir/x64_lifter.cpp
+    src/ir/x86_lifter_fp.cpp
     src/ir/x64_lifter_alu.cpp
     src/ir/x64_lifter_control.cpp
     src/ir/x64_lifter_data.cpp

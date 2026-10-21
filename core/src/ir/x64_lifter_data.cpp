@@ -286,14 +286,14 @@ void lift_push(LiftCtx& ctx) {
     if (insn.num_operands != 1) return;
     IrValue val = materialize_rvalue(insn.operands[0], ctx);
     const bool word = insn.prefixes.opsize;
-    const IrType stack_type = word ? IrType::I16 : IrType::I64;
-    const i64 stack_size = word ? 2 : 8;
+    const IrType stack_type = word ? IrType::I16 : ctx.word_type();
+    const i64 stack_size = word ? 2 : ctx.word_size();
     if (val.type != stack_type) {
         val = ctx.match_size(val, stack_type, /*sign_ext=*/true);
     }
     IrValue rsp = ctx.reg(Reg::Rsp);
     IrValue new_rsp = ctx.emit_binop(IrOp::Sub, rsp,
-                                     ctx.imm(stack_size, IrType::I64));
+                                     ctx.imm(stack_size, ctx.word_type()));
     ctx.emit_store(new_rsp, val);
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
 }
@@ -303,12 +303,12 @@ void lift_pop(LiftCtx& ctx) {
     if (insn.num_operands != 1) return;
     const IrType t = operand_type(insn.operands[0]);
     const bool word = insn.prefixes.opsize;
-    const IrType stack_type = word ? IrType::I16 : IrType::I64;
-    const i64 stack_size = word ? 2 : 8;
+    const IrType stack_type = word ? IrType::I16 : ctx.word_type();
+    const i64 stack_size = word ? 2 : ctx.word_size();
     IrValue rsp = ctx.reg(Reg::Rsp);
     IrValue val = ctx.emit_load(rsp, stack_type);
     IrValue new_rsp = ctx.emit_binop(IrOp::Add, rsp,
-                                     ctx.imm(stack_size, IrType::I64));
+                                     ctx.imm(stack_size, ctx.word_type()));
     ctx.emit_assign(ctx.reg(Reg::Rsp), new_rsp);
     val = ctx.match_size(val, t, /*sign_ext=*/false);
     store_lvalue(insn.operands[0], val, ctx);

@@ -1,0 +1,4 @@
+// _stdcall_sum@8
+uint32_t _stdcall_sum@8(uint32_t a1, uint32_t a2) {
+  return a2 + a1;
+}

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/x86.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/disasm/instruction.hpp>
 #include <spelunk/disasm/register.hpp>
@@ -29,6 +30,14 @@ void emit_call_clobbers(LiftCtx& ctx) {
         c.dst = IrValue::make_reg(r, IrType::I128);
         ctx.emit(std::move(c));
     }
+    if (ctx.mode32()) {
+        for (unsigned n = 0; n < 8; ++n) {
+            IrInst c;
+            c.op = IrOp::Clobber;
+            c.dst = IrValue::make_reg(static_cast<Reg>(static_cast<unsigned>(Reg::St0) + n), IrType::F64);
+            ctx.emit(std::move(c));
+        }
+    }
 }
 
 // Emit the ABI barriers that keep argument-register setup code live
@@ -43,11 +52,11 @@ void emit_arg_barriers(LiftCtx& ctx) {
     stack.op = IrOp::Intrinsic;
     stack.name = "call.stack_pointer";
     stack.srcs[0] = ctx.insn->mnemonic == Mnemonic::Jmp
-        ? ctx.emit_binop(IrOp::Add, ctx.reg(Reg::Rsp), ctx.imm(8, IrType::I64))
+        ? ctx.emit_binop(IrOp::Add, ctx.reg(Reg::Rsp), ctx.imm(ctx.word_size(), ctx.word_type()))
         : ctx.reg(Reg::Rsp);
     stack.src_count = 1;
     ctx.emit(std::move(stack));
-    const auto args = int_arg_regs(ctx.abi);
+    const auto args = int_arg_regs(ctx.mode32() ? Abi::Win32Fastcall : ctx.abi);
     auto arg_value = [&](std::size_t slot) -> IrValue {
         if (slot < args.size()) return ctx.reg(args[slot]);
         if (ctx.abi == Abi::Win64 && slot < kMaxAbiIntArgs) {
@@ -116,6 +125,19 @@ void lift_call(LiftCtx& ctx) {
     // a caller-saved reg that isn't read before the call becomes dead
     // (picked up by the existing DCE pass).
     emit_call_clobbers(ctx);
+    if (ctx.mode32() && ctx.binary) {
+        addr_t target = 0;
+        if (op.kind == Operand::Kind::Relative) target = op.rel.target;
+        if (op.kind == Operand::Kind::Memory && op.mem.base == Reg::None && op.mem.index == Reg::None)
+            target = static_cast<u32>(op.mem.disp);
+        if (target) {
+            const auto callee = analyze_x86_function(*ctx.binary, target);
+            if (callee.callee_pop) {
+                const IrValue sp = ctx.reg(Reg::Rsp);
+                ctx.emit_assign(sp, ctx.emit_binop(IrOp::Add, sp, ctx.imm(callee.callee_pop, IrType::I32)));
+            }
+        }
+    }
 }
 
 void lift_ret(LiftCtx& ctx) {
@@ -129,6 +151,7 @@ void lift_ret(LiftCtx& ctx) {
     i.srcs[0]   = ctx.read_reg(Reg::Rax);
     i.srcs[1]   = IrValue::make_reg(Reg::Xmm0, IrType::F64);
     i.src_count = 2;
+    if (ctx.mode32()) i.srcs[1] = IrValue::make_reg(Reg::St0, IrType::F64);
     ctx.emit(std::move(i));
 }
 

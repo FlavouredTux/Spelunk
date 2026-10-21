@@ -14,6 +14,9 @@ constexpr Reg kSysvArgRegs[6] = {
 constexpr Reg kWin64ArgRegs[4] = {
     Reg::Rcx, Reg::Rdx, Reg::R8, Reg::R9,
 };
+constexpr Reg kWin32ThisArgs[1] = {Reg::Rcx};
+constexpr Reg kWin32FastArgs[2] = {Reg::Rcx, Reg::Rdx};
+constexpr Reg kWin32CallerSaved[3] = {Reg::Rax, Reg::Rcx, Reg::Rdx};
 
 constexpr Reg kSysvCallerSaved[9] = {
     Reg::Rax, Reg::Rcx, Reg::Rdx, Reg::Rsi, Reg::Rdi,
@@ -106,6 +109,10 @@ constexpr Reg kAapcs64CallerSaved[18] = {
 
 std::span<const Reg> int_arg_regs(Abi a) noexcept {
     switch (a) {
+        case Abi::Win32Cdecl:
+        case Abi::Win32Stdcall: return {};
+        case Abi::Win32Thiscall: return kWin32ThisArgs;
+        case Abi::Win32Fastcall: return kWin32FastArgs;
         case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be: return kPpcArgRegs;
@@ -120,6 +127,8 @@ std::span<const Reg> int_arg_regs(Abi a) noexcept {
 
 std::span<const Reg> caller_saved_int_regs(Abi a) noexcept {
     switch (a) {
+        case Abi::Win32Cdecl: case Abi::Win32Stdcall:
+        case Abi::Win32Thiscall: case Abi::Win32Fastcall: return kWin32CallerSaved;
         case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be: return kPpcCallerSaved;
@@ -134,6 +143,8 @@ std::span<const Reg> caller_saved_int_regs(Abi a) noexcept {
 
 std::span<const Reg> fp_arg_regs(Abi a) noexcept {
     switch (a) {
+        case Abi::Win32Cdecl: case Abi::Win32Stdcall:
+        case Abi::Win32Thiscall: case Abi::Win32Fastcall: return {};
         case Abi::Aapcs64:      return kAapcs64FpArgRegs;
         case Abi::AapcsArm32:   // VFP arg passing not modelled.
                                 return {};
@@ -149,6 +160,9 @@ std::span<const Reg> fp_arg_regs(Abi a) noexcept {
 
 std::span<const Reg> caller_saved_fp_regs(Abi a) noexcept {
     switch (a) {
+        case Abi::Win32Cdecl: case Abi::Win32Stdcall:
+        case Abi::Win32Thiscall: case Abi::Win32Fastcall:
+            return std::span{kSysvCallerSavedFp}.first(8);
         case Abi::Ppc32Sysv:
         case Abi::Ppc64ElfV2Le:
         case Abi::Ppc64ElfV1Be: return kPpcCallerSavedFp;
@@ -179,6 +193,8 @@ Reg int_return_reg(Abi a) noexcept {
 
 Reg fp_return_reg(Abi a) noexcept {
     switch (a) {
+        case Abi::Win32Cdecl: case Abi::Win32Stdcall:
+        case Abi::Win32Thiscall: case Abi::Win32Fastcall: return Reg::St0;
         case Abi::Win64:
         case Abi::SysVAmd64:
         case Abi::Unknown:

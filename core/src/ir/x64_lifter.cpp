@@ -7,6 +7,7 @@
 #include <utility>
 
 #include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/x86.hpp>
 #include <spelunk/common/error.hpp>
 #include <spelunk/disasm/instruction.hpp>
 #include <spelunk/disasm/register.hpp>
@@ -15,9 +16,12 @@
 #include "x64_lifter_internal.hpp"
 
 namespace spelunk::x64_lift {
+bool lift_x86_fp(LiftCtx& ctx);
 
 void lift_instruction(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
+    if (ctx.mode32() && insn.mnemonic >= Mnemonic::X87Fld &&
+        insn.mnemonic <= Mnemonic::X87Finit && lift_x86_fp(ctx)) return;
     switch (insn.mnemonic) {
         case Mnemonic::Mov:     lift_mov(ctx);     break;
         case Mnemonic::Movzx:   lift_movzx(ctx);   break;
@@ -501,6 +505,8 @@ namespace spelunk {
 using namespace x64_lift;
 
 Result<IrFunction> X64Lifter::lift(const Function& fn) const {
+    const Abi function_abi = is_x86_32_abi(abi_) && binary_
+        ? analyze_x86_function(*binary_, fn.start).abi : abi_;
     IrFunction ir;
     ir.start = fn.start;
     ir.end   = fn.end;
@@ -535,7 +541,8 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
         LiftCtx ctx;
         ctx.fn  = &ir;
         ctx.blk = &dst_bb;
-        ctx.abi = abi_;
+        ctx.abi = function_abi;
+        ctx.binary = binary_;
         ctx.preserve_scalar_lanes = preserve_scalar_lanes;
 
         for (const auto& insn : src_bb.instructions) {

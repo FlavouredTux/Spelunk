@@ -97,6 +97,10 @@ enum class Reg : u16 {
     ArmR8,  ArmR9,  ArmR10, ArmR11, ArmR12,
     Asp, Alr, Apc,
 
+    // Logical x87 stack positions. Push/pop lifters shift these values so
+    // ordinary SSA merges also describe x87 values across control flow.
+    St0, St1, St2, St3, St4, St5, St6, St7,
+
     // Sentinel. Always last. Size tables (kCanonical in ir/ssa.cpp,
     // reg_name in disasm/register.cpp) static_assert against this so adding
     // a register without updating them is a compile error.
@@ -136,6 +140,8 @@ enum class Reg : u16 {
         v <= static_cast<unsigned>(Reg::V31)) return 16;
     if (v >= static_cast<unsigned>(Reg::ArmR0) &&
         v <= static_cast<unsigned>(Reg::Apc)) return 4;
+    if (v >= static_cast<unsigned>(Reg::St0) &&
+        v <= static_cast<unsigned>(Reg::St7)) return 8;
     return 0;
 }
 

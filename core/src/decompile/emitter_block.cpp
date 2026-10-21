@@ -214,13 +214,14 @@ Emitter::args_for_layout(const std::vector<InferredArgument>& layout,
         rendered->clear();
         rendered->reserve(layout.size());
     }
-    const auto int_regs = int_arg_regs(abi);
+    const auto int_regs = int_arg_regs(is_x86_32_abi(abi) ? Abi::Win32Fastcall : abi);
     const auto fp_regs = fp_arg_regs(abi);
     for (const auto& arg : layout) {
         if (arg.stack_offset) {
-            if (abi == Abi::SysVAmd64 || abi == Abi::Win64) {
-                const i64 first = abi == Abi::SysVAmd64 ? 8 : 40;
-                const i64 slot = (*arg.stack_offset - first) / 8;
+            if (is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64) {
+                const i64 word = is_x86_32_abi(abi) ? 4 : 8;
+                const i64 first = is_x86_32_abi(abi) ? 4 : (abi == Abi::SysVAmd64 ? 8 : 40);
+                const i64 slot = (*arg.stack_offset - first) / word;
                 IrValue value;
                 if (*arg.stack_offset >= first && slot >= 0 &&
                     static_cast<std::size_t>(slot) < pack.stack.size()) {
@@ -711,7 +712,7 @@ Emitter::render_direct_call(const IrInst& inst, std::size_t call_index,
             call_args = args_for_layout(layout, call_index, pack, ppc_args, &rendered_call_args);
         }
     }
-    if ((abi == Abi::SysVAmd64 || abi == Abi::Win64) && !known_variadic &&
+    if ((is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64) && !known_variadic &&
         !is_objc_msgsend_name(direct_name)) {
         const auto layout = annotated_sig ? abi_layout_for(*annotated_sig)
             : import_name ? abi_layout_for_import(*import_name)
@@ -719,7 +720,7 @@ Emitter::render_direct_call(const IrInst& inst, std::size_t call_index,
         const bool needs_layout = std::ranges::any_of(layout, [](const auto& arg) {
             return is_float_type(arg.type) || arg.stack_offset.has_value();
         });
-        if (needs_layout) {
+        if (needs_layout || is_x86_32_abi(abi)) {
             call_args = args_for_layout(layout, call_index, pack, ppc_args, &rendered_call_args);
             layout_arity = static_cast<u8>(layout.size());
         }
@@ -763,7 +764,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
             indirect_args.insert(indirect_args.end(), pack.stack.begin(), pack.stack.end());
         }
         std::vector<std::string> rendered_indirect_args;
-        if (is_ppc_abi()) {
+        if (is_ppc_abi() || is_x86_32_abi(abi)) {
             const auto layout = abi_layout_for_import(*name);
             if (!layout.empty()) {
                 indirect_args = args_for_layout(layout, call_index, pack, ppc_args,
@@ -800,7 +801,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
             const auto direct_import = import_name_for_direct_call(target);
             std::vector<IrValue> resolved_args = pack.ints;
             std::vector<std::string> rendered_resolved_args;
-            if (is_ppc_abi()) {
+            if (is_ppc_abi() || is_x86_32_abi(abi)) {
                 const auto layout = direct_import
                     ? abi_layout_for_import(*direct_import)
                     : cached_argument_layout(target);
@@ -847,7 +848,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
         }
     }
     if (call_expr.empty()) {
-        if ((abi == Abi::SysVAmd64 || abi == Abi::Win64) && inst.src_count) {
+        if ((is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64) && inst.src_count) {
             const auto target = call_signature_target(inst);
             const auto* signature = call_annotation_signature(inst);
             if (target || signature) {
@@ -1027,7 +1028,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
     std::map<i64, std::pair<i64, IrValue>> recent_stack_stores;
     for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
         const auto& inst = bb.insts[ii];
-        if ((abi == Abi::SysVAmd64 || abi == Abi::Win64) &&
+        if ((is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64) &&
             inst.op == IrOp::Store && inst.src_count >= 2) {
             if (auto offset = entry_stack_offset(inst.srcs[0])) {
                 const i64 width = static_cast<i64>(type_bits(inst.srcs[1].type) / 8);
@@ -1039,11 +1040,11 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         }
         if (inst.op == IrOp::Intrinsic && inst.name == "call.stack_pointer") {
             pack.stack.clear();
-            if (inst.src_count && (abi == Abi::SysVAmd64 || abi == Abi::Win64)) {
+            if (inst.src_count && (is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64)) {
                 if (auto offset = entry_stack_offset(inst.srcs[0])) {
                     if (abi == Abi::Win64) *offset += 32;
                     for (std::size_t i = 0; i < kMaxAbiArgs - int_arg_regs(abi).size(); ++i) {
-                        auto found = recent_stack_stores.find(*offset + static_cast<i64>(i) * 8);
+                        auto found = recent_stack_stores.find(*offset + static_cast<i64>(i) * (is_x86_32_abi(abi) ? 4 : 8));
                         if (found == recent_stack_stores.end()) break;
                         pack.stack.push_back(found->second.second);
                     }

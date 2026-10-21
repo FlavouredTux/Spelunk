@@ -1,0 +1,4 @@
+// _thiscall_sum
+uint32_t _thiscall_sum(void* a1, uint32_t a2) {
+  return ((uint32_t*)a1)[0] + a2;
+}

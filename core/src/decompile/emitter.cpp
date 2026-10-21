@@ -17,6 +17,7 @@
 #include <spelunk/analysis/demangle.hpp>
 #include <spelunk/analysis/frame.hpp>
 #include <spelunk/analysis/function.hpp>
+#include <spelunk/analysis/x86.hpp>
 #include <spelunk/analysis/objc.hpp>
 #include <spelunk/analysis/sig_inference.hpp>
 #include <spelunk/binary/binary.hpp>
@@ -621,7 +622,8 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     e.annotations = annotations;
     e.options     = options;
     e.abi         = binary
-        ? abi_for(binary->format(), binary->arch(), binary->endian())
+        ? (binary->arch() == Arch::X86 ? analyze_x86_function(*binary, sf.ir->start).abi
+                                     : abi_for(binary->format(), binary->arch(), binary->endian()))
         : Abi::SysVAmd64;
 
     EmitterMetadataStorage metadata;
@@ -778,7 +780,8 @@ PseudoCEmitter::emit_per_block(const StructuredFunction& sf,
     e.annotations = annotations;
     e.options     = options;
     e.abi         = binary
-        ? abi_for(binary->format(), binary->arch(), binary->endian())
+        ? (binary->arch() == Arch::X86 ? analyze_x86_function(*binary, sf.ir->start).abi
+                                     : abi_for(binary->format(), binary->arch(), binary->endian()))
         : Abi::SysVAmd64;
 
     EmitterMetadataStorage metadata;

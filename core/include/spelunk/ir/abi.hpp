@@ -25,6 +25,10 @@ enum class Abi : u8 {
     Unknown,
     SysVAmd64,
     Win64,
+    Win32Cdecl,
+    Win32Stdcall,
+    Win32Thiscall,
+    Win32Fastcall,
     Ppc32Sysv,
     Ppc64ElfV2Le,
     Ppc64ElfV1Be,
@@ -32,7 +36,13 @@ enum class Abi : u8 {
     AapcsArm32,
 };
 
+[[nodiscard]] constexpr bool is_x86_32_abi(Abi a) noexcept {
+    return a == Abi::Win32Cdecl || a == Abi::Win32Stdcall ||
+           a == Abi::Win32Thiscall || a == Abi::Win32Fastcall;
+}
+
 [[nodiscard]] constexpr Abi abi_for(Format f, Arch a, Endian e = Endian::Unknown) noexcept {
+    if (a == Arch::X86) return Abi::Win32Cdecl;
     if (a == Arch::X86_64) {
         // Minidump and the raw-regions loader come from Windows processes,
         // so they share Win64. Everything else x86_64 (ELF, Mach-O, the

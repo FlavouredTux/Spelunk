@@ -1,0 +1,4 @@
+// _cdecl_sum
+uint32_t _cdecl_sum(uint32_t a1, uint32_t a2) {
+  return a2 + a1;
+}

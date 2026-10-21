@@ -17,6 +17,24 @@ IrValue compute_ea(const Mem& m, LiftCtx& ctx) {
                        IrType::I64);
     }
 
+    if (ctx.mode32()) {
+        IrValue sum = ctx.imm(m.disp, IrType::I32);
+        if (m.base != Reg::None) {
+            IrValue base = ctx.match_size(ctx.read_reg(m.base), IrType::I32, false);
+            sum = m.disp == 0 ? base : ctx.emit_binop(IrOp::Add, base, sum);
+        }
+        if (m.index != Reg::None) {
+            IrValue index = ctx.match_size(ctx.read_reg(m.index), IrType::I32, false);
+            if (m.scale > 1) index = ctx.emit_binop(IrOp::Mul, index, ctx.imm(m.scale, IrType::I32));
+            sum = ctx.emit_binop(IrOp::Add, sum, index);
+        }
+        if (m.address_size == 2) {
+            sum = ctx.emit_convert(IrOp::Trunc, sum, IrType::I16);
+            sum = ctx.emit_convert(IrOp::ZExt, sum, IrType::I32);
+        }
+        return sum;
+    }
+
     IrValue sum;
     bool    has = false;
 

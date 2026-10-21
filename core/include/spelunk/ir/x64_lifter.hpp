@@ -7,6 +7,7 @@
 #include <spelunk/ir/lifter.hpp>
 
 namespace spelunk {
+class Binary;
 
 class X64Lifter final : public Lifter {
 public:
@@ -17,6 +18,7 @@ public:
     // argument-passing and caller-saved sets.
     X64Lifter() = default;
     explicit X64Lifter(Abi abi) noexcept : abi_(abi) {}
+    X64Lifter(Abi abi, const Binary* binary) noexcept : abi_(abi), binary_(binary) {}
 
     [[nodiscard]] Abi abi() const noexcept override { return abi_; }
 
@@ -24,6 +26,7 @@ public:
 
 private:
     Abi abi_ = Abi::SysVAmd64;
+    const Binary* binary_ = nullptr;
 };
 
 }  // namespace spelunk

@@ -113,11 +113,13 @@ constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::ArmR4,  Reg::ArmR5,  Reg::ArmR6,  Reg::ArmR7,
     Reg::ArmR8,  Reg::ArmR9,  Reg::ArmR10, Reg::ArmR11, Reg::ArmR12,
     Reg::Asp, Reg::Alr, Reg::Apc,
+    Reg::St0, Reg::St1, Reg::St2, Reg::St3,
+    Reg::St4, Reg::St5, Reg::St6, Reg::St7,
 };
 
 // Canonical form of the last entry must still map to itself; this catches
 // out-of-order sentinel moves where the table drifts off the end.
-static_assert(kCanonical.back() == Reg::Apc,
+static_assert(kCanonical.back() == Reg::St7,
               "kCanonical must be updated to match Reg enum");
 
 struct VarKey {
@@ -256,10 +258,13 @@ void insert_phis(IrFunction& fn,
                     const auto observed = observed_types.find(var);
                     const bool is_ppc_register =
                         canon >= Reg::PpcR0 && canon <= Reg::PpcF31;
-                    if (is_ppc_register && observed != observed_types.end() &&
+                    const bool is_x86_gpr = canon >= Reg::Rax && canon <= Reg::Rdi;
+                    if ((is_ppc_register || is_x86_gpr) &&
+                        observed != observed_types.end() &&
                         !type_conflicts.contains(var)) {
                         // PPC register width is ABI-dependent (32-bit on Wii),
-                        // and paired-single FPRs carry a vector type. Preserve
+                        // and paired-single FPRs carry a vector type. The
+                        // legacy x86 GPRs are 32-bit in protected mode. Preserve
                         // the lifter's concrete type instead of reconstructing
                         // it from the architecture-neutral register size.
                         type = observed->second;

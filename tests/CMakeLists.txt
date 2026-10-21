@@ -453,6 +453,10 @@ spelunk_build_fixture(string_cmp)
 #       -o tests/fixtures/symresolve_demo.prebuilt \
 #       tests/fixtures/symresolve_demo.c
 spelunk_use_prebuilt_fixture(symresolve_demo)
+# 32-bit PE with one function per Win32 calling convention, a
+# stack-argument loop and a kernel32 import. It needs a mingw cross
+# compiler, so the bytes are pinned; win32.c carries the build line.
+spelunk_use_prebuilt_fixture(win32)
 # Multi-resolver: two functions populating disjoint slot ranges of one
 # fnptr table - the iterative detector has to find both, the merged
 # output has to attribute every slot to the right resolver.
@@ -753,6 +757,51 @@ spelunk_golden_test(
     FIXTURE return_value_sidecar
     ARGS    "-p|-s|big"
     GOLDEN  return_value.big.signed.pseudo.txt
+)
+
+# ---- win32 (PE32, per-function x86 calling conventions) --------------------
+#
+# x86 Windows picks a convention per function, so each signature below is
+# recovered from the callee: decorated `_name@N` / `@name@N` symbols,
+# stdcall from RET n, thiscall from ecx read before any write, cdecl
+# otherwise. The loop locks
+# 32-bit GPR phis and the stack-argument pointer that seeds them.
+
+spelunk_golden_test(
+    NAME    win32_functions
+    FIXTURE win32
+    ARGS    "--no-cache|--functions"
+    GOLDEN  win32.functions.txt
+)
+spelunk_golden_test(
+    NAME    win32_cdecl_pseudo
+    FIXTURE win32
+    ARGS    "-p|-s|_cdecl_sum"
+    GOLDEN  win32.cdecl_sum.pseudo.txt
+)
+spelunk_golden_test(
+    NAME    win32_stdcall_pseudo
+    FIXTURE win32
+    ARGS    "-p|-s|_stdcall_sum@8"
+    GOLDEN  win32.stdcall_sum.pseudo.txt
+)
+spelunk_golden_test(
+    NAME    win32_fastcall_pseudo
+    FIXTURE win32
+    ARGS    "-p|-s|@fastcall_sum@12"
+    GOLDEN  win32.fastcall_sum.pseudo.txt
+)
+spelunk_golden_test(
+    NAME    win32_thiscall_pseudo
+    FIXTURE win32
+    ARGS    "-p|-s|_thiscall_sum"
+    GOLDEN  win32.thiscall_sum.pseudo.txt
+)
+spelunk_golden_test(
+    NAME    win32_loop_sum_pseudo
+    FIXTURE win32
+    ARGS    "-p|-s|_loop_sum"
+    GOLDEN  win32.loop_sum.pseudo.txt
 )
 
 # ---- imports (ELF PLT/GOT resolution) --------------------------------------

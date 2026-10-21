@@ -167,7 +167,8 @@ bool Emitter::prepare_scalar_join_copies() {
 }
 
 void Emitter::prepare_phi_copies() {
-    if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_ppc_abi())) return;
+    if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_x86_32_abi(abi) &&
+                !is_ppc_abi())) return;
     // A snapshot join can coexist with other loop-carried values. Do not
     // stop after lowering just that one Phi and lose the remaining updates.
     if (prepare_scalar_join_copies() && !has_cyclic_phi(*fn)) return;

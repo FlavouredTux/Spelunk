@@ -1,4 +1,5 @@
 #include <spelunk/analysis/arity.hpp>
+#include <spelunk/analysis/x86.hpp>
 
 #include <algorithm>
 #include <array>
@@ -552,6 +553,7 @@ static u8 infer_arity_impl(const Binary& b, addr_t target, Abi abi,
             infer_ppc_arguments_from_ir(cache, b, target, abi).size(),
             std::numeric_limits<u8>::max()));
     }
+    if (b.arch() == Arch::X86) return static_cast<u8>(analyze_x86_function(b, target).arguments.size());
     if (b.arch() != Arch::X86_64) return 0;
     const auto args = int_arg_regs(abi);
     const u8 max_arity = static_cast<u8>(args.size());
@@ -826,6 +828,7 @@ void extend_x64_fp_arguments(const IrFunction& fn, Abi abi,
 std::vector<InferredArgument>
 infer_arguments(const Binary& b, addr_t target, Abi abi,
                 IrCache& cache) noexcept {
+    if (b.arch() == Arch::X86) return analyze_x86_function(b, target).arguments;
     if (b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
         return infer_ppc_arguments_from_ir(cache, b, target, abi);
     }

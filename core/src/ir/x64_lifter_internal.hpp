@@ -23,7 +23,12 @@ struct LiftCtx {
     IrBlock*           blk  = nullptr;
     const Instruction* insn = nullptr;
     Abi                abi  = Abi::SysVAmd64;
+    const Binary* binary = nullptr;
     bool preserve_scalar_lanes = false;
+
+    [[nodiscard]] bool mode32() const noexcept { return is_x86_32_abi(abi); }
+    [[nodiscard]] IrType word_type() const noexcept { return mode32() ? IrType::I32 : IrType::I64; }
+    [[nodiscard]] i64 word_size() const noexcept { return mode32() ? 4 : 8; }
 
     // Last flag-setting computation in this block, if any. Used by Jp/Jnp/
     // Setp/Cmovp to compute PF from the actual result rather than emitting
@@ -63,6 +68,8 @@ struct LiftCtx {
     // For sub-register I/O, use read_reg/write_reg so x64 partial-register
     // semantics and zero-extend semantics are modeled explicitly.
     [[nodiscard]] IrValue reg(Reg r) noexcept {
+        if (mode32() && canonical_reg(r) >= Reg::Rax && canonical_reg(r) <= Reg::Rdi)
+            return IrValue::make_reg(canonical_reg(r), IrType::I32);
         return IrValue::make_reg(r, type_for_bits(reg_size(r) * 8));
     }
     [[nodiscard]] IrValue imm(i64 v, IrType t) noexcept {
@@ -229,6 +236,12 @@ struct LiftCtx {
         const unsigned bytes = reg_size(r);
         const IrType natural_t = type_for_bits(bytes * 8);
 
+        if (mode32() && canon >= Reg::Rax && canon <= Reg::Rdi) {
+            IrValue full = IrValue::make_reg(canon, IrType::I32);
+            if (bytes >= 4) return full;
+            if (is_high_byte(r)) full = emit_binop(IrOp::Lshr, full, imm(8, IrType::I32));
+            return emit_convert(IrOp::Trunc, full, natural_t);
+        }
         if (canon == r) {
             // Own canonical - read at the register's natural width.
             // GPRs (rax/rdi/r8/...) → I64; segment regs (fs/gs/...) → I16;
@@ -254,6 +267,21 @@ struct LiftCtx {
         const IrType natural_t = type_for_bits(bytes * 8);
         if (canon == Reg::Rax || canon == Reg::Rdx) {
             last_signext_dividend_valid = false;
+        }
+
+        if (mode32() && canon >= Reg::Rax && canon <= Reg::Rdi) {
+            IrValue dst = IrValue::make_reg(canon, IrType::I32);
+            if (bytes >= 4) {
+                emit_assign(dst, match_size(value, IrType::I32, false));
+            } else {
+                value = match_size(value, natural_t, false);
+                value = emit_convert(IrOp::ZExt, value, IrType::I32);
+                const i64 mask = is_high_byte(r) ? 0xff00 : (bytes == 2 ? 0xffff : 0xff);
+                if (is_high_byte(r)) value = emit_binop(IrOp::Shl, value, imm(8, IrType::I32));
+                IrValue preserved = emit_binop(IrOp::And, dst, imm(~mask, IrType::I32));
+                emit_assign(dst, emit_binop(IrOp::Or, preserved, value));
+            }
+            return;
         }
 
         if (canon == r) {

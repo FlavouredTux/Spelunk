@@ -35,7 +35,10 @@ namespace {
            name == "_exit" ||
            name == "_Exit" ||
            name == "longjmp" ||
-           name == "pthread_exit";
+           name == "pthread_exit" ||
+           name == "ExitProcess" ||
+           name == "ExitThread" ||
+           name == "FreeLibraryAndExitThread";
 }
 
 [[nodiscard]] bool is_noreturn_target(const Binary& b, addr_t target) noexcept {
@@ -47,6 +50,25 @@ namespace {
         return true;
     }
     return false;
+}
+
+// PE imports are called through their IAT slot: `call [rip + disp]` on
+// x86-64, `call [disp32]` on x86.
+[[nodiscard]] bool is_noreturn_iat_call(const Binary& b, const Instruction& insn) noexcept {
+    if (insn.num_operands != 1) return false;
+    const auto& op = insn.operands[0];
+    if (op.kind != Operand::Kind::Memory || op.mem.index != Reg::None ||
+        !op.mem.has_disp) return false;
+    addr_t slot = 0;
+    if (op.mem.base == Reg::Rip) {
+        slot = insn.address + insn.length + static_cast<addr_t>(op.mem.disp);
+    } else if (op.mem.base == Reg::None) {
+        slot = static_cast<addr_t>(op.mem.disp);
+    } else {
+        return false;
+    }
+    const Symbol* s = b.import_at_got(slot);
+    return s && is_noreturn_import_name(s->name);
 }
 
 }  // namespace
@@ -104,6 +126,9 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
                         ws.noreturn_calls.insert(ip);
                         break;
                     }
+                } else if (is_noreturn_iat_call(b, insn)) {
+                    ws.noreturn_calls.insert(ip);
+                    break;
                 }
                 ip = fallthrough;
                 continue;

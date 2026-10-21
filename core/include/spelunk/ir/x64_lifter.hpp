@@ -18,7 +18,11 @@ public:
     // argument-passing and caller-saved sets.
     X64Lifter() = default;
     explicit X64Lifter(Abi abi) noexcept : abi_(abi) {}
-    X64Lifter(Abi abi, const Binary* binary) noexcept : abi_(abi), binary_(binary) {}
+    // x86 needs the image for per-function conventions and callee stack
+    // cleanup. The convention analysis itself lifts with
+    // resolve_function_abi off: it is computing that convention.
+    X64Lifter(Abi abi, const Binary* binary, bool resolve_function_abi = true) noexcept
+        : abi_(abi), binary_(binary), resolve_function_abi_(resolve_function_abi) {}
 
     [[nodiscard]] Abi abi() const noexcept override { return abi_; }
 
@@ -27,6 +31,7 @@ public:
 private:
     Abi abi_ = Abi::SysVAmd64;
     const Binary* binary_ = nullptr;
+    bool resolve_function_abi_ = true;
 };
 
 }  // namespace spelunk

@@ -4,9 +4,12 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <typeindex>
+#include <typeinfo>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -131,10 +134,30 @@ public:
     [[nodiscard]] std::vector<const Symbol*>
     find_all_by_name(std::string_view name) const;
 
-    // Invalidate the lookup caches. Loaders call this when symbols_
-    // changes after the initial parse() - e.g. when the PDB sidecar
-    // ingestion pass adds names that the on-disk PE didn't carry.
-    void invalidate_caches() const noexcept { caches_.reset(); }
+    // Invalidate the lookup caches and analysis memos. Loaders call this
+    // when symbols_ changes after the initial parse() - e.g. when the PDB
+    // sidecar ingestion pass adds names that the on-disk PE didn't carry.
+    void invalidate_caches() const noexcept {
+        caches_.reset();
+        const std::lock_guard lock(analysis_memo_mutex_);
+        analysis_memos_.clear();
+    }
+
+    // Per-image memo for analyses whose results depend only on the image
+    // and its symbols, such as x86 per-function calling conventions. The
+    // analysis defines the payload and guards its own contents; the binary
+    // owns its lifetime and drops it with the lookup caches. Safe to call
+    // from concurrent lifters, but not concurrently with a symbol change.
+    struct AnalysisMemo {
+        virtual ~AnalysisMemo() = default;
+    };
+    template <class T>
+    [[nodiscard]] T& analysis_memo() const {
+        const std::lock_guard lock(analysis_memo_mutex_);
+        auto& slot = analysis_memos_[std::type_index(typeid(T))];
+        if (!slot) slot = std::make_unique<T>();
+        return static_cast<T&>(*slot);
+    }
 
     // Add a synthetic Function symbol at `va`. Used by the
     // `--force-fn-start <VA>` CLI override to correct mis-attributed
@@ -220,6 +243,10 @@ private:
     // off instruction VAs, not symbol identity).
     mutable std::unordered_map<addr_t, std::vector<addr_t>> indirect_edges_;
     mutable std::unordered_map<addr_t, u64> runtime_qwords_;
+
+    mutable std::mutex analysis_memo_mutex_;
+    mutable std::unordered_map<std::type_index, std::unique_ptr<AnalysisMemo>>
+        analysis_memos_;
 };
 
 // Optional knobs for `load_binary`.

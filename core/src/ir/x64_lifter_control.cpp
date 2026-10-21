@@ -1,12 +1,13 @@
 // Calls, returns, jumps and conditional branches.
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <spelunk/analysis/function.hpp>
-#include <spelunk/analysis/x86.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/disasm/instruction.hpp>
 #include <spelunk/disasm/register.hpp>
@@ -18,7 +19,16 @@
 namespace spelunk::x64_lift {
 
 void emit_call_clobbers(LiftCtx& ctx) {
+    const std::vector<Reg>* preserved = nullptr;
+    if (ctx.call_preserved) {
+        if (auto found = ctx.call_preserved->find(ctx.insn->address);
+            found != ctx.call_preserved->end()) {
+            preserved = &found->second;
+        }
+    }
     for (Reg r : caller_saved_int_regs(ctx.abi)) {
+        if (preserved && std::ranges::find(*preserved, canonical_reg(r)) != preserved->end())
+            continue;
         IrInst c;
         c.op  = IrOp::Clobber;
         c.dst = ctx.reg(r);
@@ -125,17 +135,10 @@ void lift_call(LiftCtx& ctx) {
     // a caller-saved reg that isn't read before the call becomes dead
     // (picked up by the existing DCE pass).
     emit_call_clobbers(ctx);
-    if (ctx.mode32() && ctx.binary) {
-        addr_t target = 0;
-        if (op.kind == Operand::Kind::Relative) target = op.rel.target;
-        if (op.kind == Operand::Kind::Memory && op.mem.base == Reg::None && op.mem.index == Reg::None)
-            target = static_cast<u32>(op.mem.disp);
-        if (target) {
-            const auto callee = analyze_x86_function(*ctx.binary, target);
-            if (callee.callee_pop) {
-                const IrValue sp = ctx.reg(Reg::Rsp);
-                ctx.emit_assign(sp, ctx.emit_binop(IrOp::Add, sp, ctx.imm(callee.callee_pop, IrType::I32)));
-            }
+    if (ctx.mode32() && ctx.call_pops) {
+        if (auto pop = ctx.call_pops->find(ctx.insn->address); pop != ctx.call_pops->end()) {
+            const IrValue sp = ctx.reg(Reg::Rsp);
+            ctx.emit_assign(sp, ctx.emit_binop(IrOp::Add, sp, ctx.imm(pop->second, IrType::I32)));
         }
     }
 }

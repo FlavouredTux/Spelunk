@@ -4,7 +4,9 @@
 
 #include <cstddef>
 #include <format>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include <spelunk/analysis/function.hpp>
 #include <spelunk/analysis/x86.hpp>
@@ -505,8 +507,14 @@ namespace spelunk {
 using namespace x64_lift;
 
 Result<IrFunction> X64Lifter::lift(const Function& fn) const {
-    const Abi function_abi = is_x86_32_abi(abi_) && binary_
+    const bool x86 = is_x86_32_abi(abi_) && binary_;
+    const Abi function_abi = x86 && resolve_function_abi_
         ? analyze_x86_function(*binary_, fn.start).abi : abi_;
+    const auto call_pops = x86 ? x86_call_pops(*binary_, fn)
+                               : std::unordered_map<addr_t, u16>{};
+    const auto call_preserved = x86 && resolve_function_abi_
+        ? x86_call_preserved(*binary_, fn)
+        : std::unordered_map<addr_t, std::vector<Reg>>{};
     IrFunction ir;
     ir.start = fn.start;
     ir.end   = fn.end;
@@ -543,6 +551,8 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
         ctx.blk = &dst_bb;
         ctx.abi = function_abi;
         ctx.binary = binary_;
+        ctx.call_pops = &call_pops;
+        ctx.call_preserved = &call_preserved;
         ctx.preserve_scalar_lanes = preserve_scalar_lanes;
 
         for (const auto& insn : src_bb.instructions) {

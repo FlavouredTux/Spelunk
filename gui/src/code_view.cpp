@@ -131,13 +131,15 @@ void CodeView::on_cursor_moved() {
 }
 
 QString CodeView::token_at(const QTextCursor& c) const {
-    const QString text = c.block().text();
-    const auto    n    = text.size();
+    return token_in_text(c.block().text(), c.positionInBlock());
+}
+
+QString token_in_text(const QString& text, qsizetype pos) {
+    const auto n = text.size();
     auto is_tok = [](QChar ch) {
         return ch.isLetterOrNumber() || ch == QLatin1Char('_') ||
                ch == QLatin1Char('$') || ch == QLatin1Char('@');
     };
-    qsizetype pos = c.positionInBlock();
     if (pos >= n || !is_tok(text[pos])) {
         if (pos > 0 && is_tok(text[pos - 1])) --pos;
         else return {};

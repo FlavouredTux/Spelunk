@@ -10,6 +10,8 @@ add_executable(spelunk_gui
     src/session.cpp
     src/function_model.cpp
     src/code_view.cpp
+    src/graph_layout.cpp
+    src/graph_view.cpp
     src/hex_view.cpp
     src/highlighters.cpp
     src/nav_band.cpp
@@ -39,6 +41,8 @@ if(BUILD_TESTING)
         src/session.cpp
         src/function_model.cpp
         src/code_view.cpp
+        src/graph_layout.cpp
+        src/graph_view.cpp
         src/hex_view.cpp
         src/highlighters.cpp
         src/nav_band.cpp
@@ -46,6 +50,14 @@ if(BUILD_TESTING)
     )
     target_link_libraries(spelunk_gui_keymap_test PRIVATE spelunk::core spelunk::flags Qt6::Widgets Qt6::Test)
     add_test(NAME gui_ida_keymap
-             COMMAND spelunk_gui_keymap_test "${CMAKE_SOURCE_DIR}/tests/fixtures/pointer_walk.prebuilt")
+             COMMAND spelunk_gui_keymap_test "${CMAKE_SOURCE_DIR}/tests/fixtures/pointer_walk.prebuilt"
+                     "${CMAKE_SOURCE_DIR}/tests/fixtures/printf_noise.prebuilt")
     set_tests_properties(gui_ida_keymap PROPERTIES TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
+if(BUILD_TESTING)
+    # The graph layout has no Qt dependency; check its invariants directly.
+    add_executable(spelunk_gui_graph_layout_test tests/graph_layout_test.cpp src/graph_layout.cpp)
+    target_link_libraries(spelunk_gui_graph_layout_test PRIVATE spelunk::flags)
+    add_test(NAME gui_graph_layout COMMAND spelunk_gui_graph_layout_test)
 endif()

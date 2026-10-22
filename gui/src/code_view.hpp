@@ -8,6 +8,10 @@
 
 namespace spelunk::gui {
 
+// Identifier or number around column `pos` of `text`, empty when none.
+// Shared by the text and graph views so both select the same words.
+[[nodiscard]] QString token_in_text(const QString& text, qsizetype pos);
+
 // Read-only code listing with IDA's navigation feel: a highlighted
 // current line, Enter / double-click on a name or address to follow it,
 // Esc to go back. The view is dumb about what the text means; the owner

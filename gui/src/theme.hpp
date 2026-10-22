@@ -29,6 +29,15 @@ inline const QColor kType           {0x00, 0x00, 0x80};
 inline const QColor kString         {0x00, 0x80, 0x00};
 inline const QColor kCall           {0x00, 0x00, 0xff};
 
+// Graph view
+inline const QColor kGraphBackground {0xf4, 0xf4, 0xf9};
+inline const QColor kGraphNode       {0xff, 0xff, 0xff};
+inline const QColor kGraphNodeBorder {0x80, 0x80, 0x90};
+inline const QColor kGraphNodeActive {0x33, 0x66, 0xcc};   // block holding the cursor
+inline const QColor kEdgeTaken       {0x00, 0x99, 0x00};   // conditional jump taken
+inline const QColor kEdgeNotTaken    {0xcc, 0x00, 0x00};   // conditional fallthrough
+inline const QColor kEdgeAlways      {0x00, 0x00, 0xcc};   // unconditional / fallthrough
+
 // Navigation band
 inline const QColor kBandRegular    {0x3c, 0x72, 0xd1};   // regular function
 inline const QColor kBandLibrary    {0x38, 0xb7, 0xc8};   // library function

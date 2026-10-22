@@ -29,14 +29,18 @@
 #include <format>
 #include <set>
 
+#include <spelunk/analysis/cfg_builder.hpp>
+#include <spelunk/analysis/data_xrefs.hpp>
 #include <spelunk/analysis/pipeline.hpp>
 #include <spelunk/binary/arch.hpp>
 #include <spelunk/binary/format.hpp>
 #include <spelunk/common/timing.hpp>
+#include <spelunk/disasm/decoder.hpp>
 
 #include "chooser.hpp"
 #include "code_view.hpp"
 #include "function_model.hpp"
+#include "graph_view.hpp"
 #include "hex_view.hpp"
 #include "highlighters.hpp"
 #include "nav_band.hpp"
@@ -264,9 +268,7 @@ void MainWindow::build_actions() {
                        &MainWindow::toggle_number);
     act_toggle_view_ = make(QStringLiteral("Toggle &pseudocode / disassembly"), QStringLiteral("Tab"),
                             &MainWindow::toggle_view);
-    act_graph_ = make(QStringLiteral("&Graph view"), QStringLiteral("Space"), [this] {
-        log(QStringLiteral("Graph view is not implemented yet; the listing is text only."));
-    });
+    act_graph_ = make(QStringLiteral("&Graph view"), QStringLiteral("Space"), &MainWindow::toggle_graph);
     for (QAction* a : {act_rename_, act_comment_, act_comment_alt_, act_comment_pseudo_, act_number_,
                         act_toggle_view_, act_graph_, act_xrefs_}) {
         a->setShortcutContext(Qt::WidgetWithChildrenShortcut);
@@ -413,6 +415,12 @@ void MainWindow::build_central() {
     tabs_->setMovable(true);
     tabs_->setDocumentMode(true);
     connect(tabs_, &QTabWidget::tabCloseRequested, this, &MainWindow::on_tab_close);
+    // A graph tab brought forward with the mouse shows the current function.
+    connect(tabs_, &QTabWidget::currentChanged, this, [this] {
+        if (!session_ || !graph_ || tabs_->currentWidget() != graph_ || !current_fn_ ||
+            graph_fn_ == current_fn_) return;
+        if (const auto* fn = session_->function_at(*current_fn_)) render_graph(*fn);
+    });
     tabs_->addActions({act_rename_, act_comment_, act_comment_alt_, act_comment_pseudo_,
                        act_number_, act_toggle_view_, act_graph_, act_xrefs_});
     setCentralWidget(tabs_);
@@ -589,6 +597,8 @@ void MainWindow::start_xref_analysis() {
         QElapsedTimer timer;
         timer.start();
         const auto edges = compute_call_graph(*session->binary);
+        auto data_refs = std::make_shared<std::map<addr_t, std::vector<DataXref>>>(
+            compute_data_xrefs(*session->binary));
         auto callers = std::make_shared<std::unordered_map<addr_t, std::vector<addr_t>>>();
         for (const auto& e : edges) (*callers)[e.callee].push_back(e.caller);
         for (auto& [callee, list] : *callers) {
@@ -597,17 +607,19 @@ void MainWindow::start_xref_analysis() {
         }
         const std::size_t n  = edges.size();
         const qint64      ms = timer.elapsed();
-        QMetaObject::invokeMethod(this, [this, session, callers, n, ms] {
-            on_xrefs_ready(session, callers, n, ms);
+        QMetaObject::invokeMethod(this, [this, session, callers, data_refs, n, ms] {
+            on_xrefs_ready(session, callers, data_refs, n, ms);
         }, Qt::QueuedConnection);
     });
 }
 
 void MainWindow::on_xrefs_ready(const std::shared_ptr<Session>& s,
                                 std::shared_ptr<std::unordered_map<addr_t, std::vector<addr_t>>> callers,
+                                std::shared_ptr<std::map<addr_t, std::vector<DataXref>>> data_refs,
                                 std::size_t edges, qint64 ms) {
     if (s != session_) return;   // a different file was opened meanwhile
     session_->callers     = std::move(*callers);
+    session_->data_refs   = std::move(*data_refs);
     session_->xrefs_ready = true;
     disasm_cache_.clear();
 
@@ -626,7 +638,10 @@ void MainWindow::on_xrefs_ready(const std::shared_ptr<Session>& s,
         }
     }
     au_label_->setText(QStringLiteral("AU: idle"));
-    log(QStringLiteral("Cross-references: %1 call edges in %2 ms.").arg(edges).arg(ms));
+    std::size_t data_count = 0;
+    for (const auto& [_, refs] : session_->data_refs) data_count += refs.size();
+    log(QStringLiteral("Cross-references: %1 call edges, %2 data references in %3 ms.")
+            .arg(edges).arg(data_count).arg(ms));
     log(QStringLiteral("The initial autoanalysis has been finished."));
     emit analysis_finished();
 }
@@ -644,6 +659,7 @@ void MainWindow::close_session() {
     history_.clear();
     history_pos_ = 0;
     current_fn_.reset();
+    graph_fn_.reset();
     session_.reset();
     addr_label_->clear();
     setWindowTitle(QStringLiteral("Spelunk"));
@@ -668,11 +684,12 @@ void MainWindow::jump_to(addr_t va, bool record) {
     // Keep the focused view's tab; only raise the disassembly when the
     // current tab is a table (Strings, Imports, ...) that cannot show code.
     QWidget* cur = tabs_->currentWidget();
-    if (cur != disasm_ && cur != pseudo_) tabs_->setCurrentWidget(disasm_);
+    if (cur != disasm_ && cur != pseudo_ && (!graph_ || cur != graph_)) tabs_->setCurrentWidget(disasm_);
 
     // Setting the cursor fires line_address_changed, which calls sync_chrome.
     if (disasm_) disasm_->go_to_address(va);
     if (pseudo_) pseudo_->go_to_address(va);
+    if (graph_ && tabs_->currentWidget() == graph_) graph_->go_to_address(va);
     sync_chrome(va);
 
     if (record) push_history(va);
@@ -942,6 +959,10 @@ MainWindow::Rendered MainWindow::render_disassembly(const FuncWindow& w) {
         if (!insn.comment.empty() && !named_target)
             comments << QString::fromUtf8(insn.comment.data(), static_cast<qsizetype>(insn.comment.size()));
 
+        QString graph_line = QStringLiteral("  ") + QString::fromStdString(mnemonic).leftJustified(8) + operands;
+        if (!comments.isEmpty()) graph_line += QStringLiteral("  ; ") + comments.join(QStringLiteral(" | "));
+        out.graph_lines.emplace(insn.addr, std::move(graph_line));
+
         QString body;
         if (show_opcodes_)
             body += QString::fromUtf8(insn.bytes.data(), static_cast<qsizetype>(insn.bytes.size()))
@@ -1089,10 +1110,14 @@ void MainWindow::show_function(const DiscoveredFunction& fn) {
     if (pseudo_) {
         request_pseudocode(*win);
     }
+    if (graph_ && tabs_->currentWidget() == graph_) render_graph(fn);
 }
 
 void MainWindow::open_pseudocode() {
     if (!session_ || !current_fn_) return;
+    std::optional<addr_t> va;
+    if (const auto at = cursor()) va = at->address;
+    if (!va && disasm_) va = disasm_->current_line_address();
     const bool fresh = pseudo_ == nullptr;
     CodeView* p = ensure_pseudocode_tab();
     if (fresh) {
@@ -1103,9 +1128,7 @@ void MainWindow::open_pseudocode() {
         }
     }
     tabs_->setCurrentWidget(p);
-    if (disasm_) {
-        if (auto va = disasm_->current_line_address()) p->go_to_address(*va);
-    }
+    if (va) p->go_to_address(*va);
     p->setFocus();
 }
 
@@ -1162,6 +1185,123 @@ HexView* MainWindow::ensure_hex_tab() {
         tabs_->insertTab(at, hex_, QStringLiteral("Hex View-1"));
     }
     return hex_;
+}
+
+GraphView* MainWindow::ensure_graph_tab() {
+    if (!session_) return nullptr;
+    if (!graph_) {
+        graph_ = new GraphView(tabs_);
+        connect(graph_, &GraphView::jump_requested, this, &MainWindow::jump_to_token);
+        connect(graph_, &GraphView::back_requested, this, &MainWindow::jump_back);
+        connect(graph_, &GraphView::line_address_changed, this, &MainWindow::sync_chrome);
+        const int at = disasm_ ? tabs_->indexOf(disasm_) + 1 : 0;
+        tabs_->insertTab(at, graph_, QStringLiteral("Spelunk Graph-A"));
+    }
+    return graph_;
+}
+
+void MainWindow::render_graph(const DiscoveredFunction& fn) {
+    GraphView* g = ensure_graph_tab();
+    if (!g) return;
+    graph_fn_ = fn.addr;
+    auto decoder = make_decoder(*session_->binary);
+    if (!decoder) {
+        g->show_message(QString::fromStdString(decoder.error().message));
+        return;
+    }
+    const CfgBuilder builder(*session_->binary, **decoder);
+    auto cfg = builder.build(fn.addr, fn.name);
+    if (!cfg) {
+        g->show_message(QStringLiteral("No control-flow graph: %1")
+                            .arg(QString::fromStdString(cfg.error().message)));
+        return;
+    }
+    constexpr std::size_t kMaxGraphBlocks = 1500;
+    if (cfg->blocks.size() > kMaxGraphBlocks) {
+        g->show_message(QStringLiteral("%1 blocks are too many to lay out; Space returns to the text view.")
+                            .arg(cfg->blocks.size()));
+        return;
+    }
+    // Block lines come from the text listing so names, comments and the
+    // H toggles read the same in both views.
+    auto listing = disasm_cache_.find(fn.addr);
+    if (listing == disasm_cache_.end()) {
+        if (auto win = session_->window_for(fn))
+            listing = disasm_cache_.emplace(fn.addr, render_disassembly(*win)).first;
+    }
+
+    // IDA labels only the blocks something jumps to, not plain fallthroughs.
+    std::set<addr_t> jumped_to;
+    for (const auto& bb : cfg->blocks) {
+        if (bb.kind == BlockKind::Fallthrough) continue;
+        for (std::size_t k = 0; k < bb.successors.size(); ++k)
+            if (!(bb.kind == BlockKind::Conditional && k == 1)) jumped_to.insert(bb.successors[k]);
+    }
+    std::vector<GraphView::Block> blocks;
+    blocks.reserve(cfg->blocks.size());
+    for (const auto& bb : cfg->blocks) {
+        GraphView::Block block;
+        if (bb.start == fn.addr) {
+            block.lines << QStringLiteral(" %1 proc near").arg(QString::fromStdString(session_->name_at(fn.addr)));
+            block.line_addrs.push_back(bb.start);
+        } else if (jumped_to.contains(bb.start)) {
+            std::string label = session_->name_at(bb.start);
+            if (label.empty()) label = std::format("loc_{:x}", bb.start);
+            block.lines << QStringLiteral(" %1:").arg(QString::fromStdString(label));
+            block.line_addrs.push_back(bb.start);
+        }
+        for (const auto& insn : bb.instructions) {
+            QString line;
+            if (listing != disasm_cache_.end()) {
+                if (const auto found = listing->second.graph_lines.find(insn.address);
+                    found != listing->second.graph_lines.end()) line = found->second;
+            }
+            if (line.isEmpty()) line = QStringLiteral("  ") + QString::fromStdString(format_instruction(insn));
+            block.lines << line;
+            block.line_addrs.push_back(insn.address);
+        }
+        blocks.push_back(std::move(block));
+    }
+    std::vector<GraphView::Edge> edges;
+    for (std::size_t i = 0; i < cfg->blocks.size(); ++i) {
+        const auto& bb = cfg->blocks[i];
+        const bool conditional = bb.kind == BlockKind::Conditional && bb.successors.size() >= 2;
+        for (std::size_t k = 0; k < bb.successors.size(); ++k) {
+            const auto to = cfg->block_at.find(bb.successors[k]);
+            if (to == cfg->block_at.end()) continue;   // tail call into another function
+            GraphView::EdgeKind kind = GraphView::EdgeKind::Always;
+            if (conditional) kind = k == 0 ? GraphView::EdgeKind::Taken : GraphView::EdgeKind::NotTaken;
+            edges.push_back({i, to->second, kind});
+        }
+    }
+    const auto entry = cfg->block_at.find(fn.addr);
+    g->set_graph(blocks, edges, entry != cfg->block_at.end() ? entry->second : 0);
+}
+
+void MainWindow::toggle_graph() {
+    if (!session_ || !current_fn_) return;
+    if (graph_ && tabs_->currentWidget() == graph_) {
+        const auto va = graph_->current_line_address();
+        CodeView* d = ensure_disassembly_tab();
+        tabs_->setCurrentWidget(d);
+        if (va) d->go_to_address(*va);
+        d->setFocus();
+        return;
+    }
+    std::optional<addr_t> va;
+    if (const auto at = cursor()) va = at->address;
+    const DiscoveredFunction* fn = session_->function_at(*current_fn_);
+    if (!fn) return;
+    GraphView* g = ensure_graph_tab();
+    if (graph_fn_ != fn->addr) render_graph(*fn);
+    tabs_->setCurrentWidget(g);
+    g->go_to_address(va ? *va : fn->addr);
+    g->setFocus();
+}
+
+void MainWindow::open_graph_for_test(bool fit) {
+    toggle_graph();
+    if (fit && graph_) graph_->fit_to_window();
 }
 
 void MainWindow::open_hex() {
@@ -1263,6 +1403,10 @@ void MainWindow::on_tab_close(int index) {
     if (w == disasm_) disasm_ = nullptr;
     if (w == pseudo_) pseudo_ = nullptr;
     if (w == hex_) hex_ = nullptr;
+    if (w == graph_) {
+        graph_ = nullptr;
+        graph_fn_.reset();
+    }
     w->deleteLater();
 }
 
@@ -1272,6 +1416,30 @@ void MainWindow::on_tab_close(int index) {
 
 CodeView* MainWindow::current_code_view() const {
     return qobject_cast<CodeView*>(tabs_->currentWidget());
+}
+
+std::optional<MainWindow::Cursor> MainWindow::cursor() const {
+    if (const CodeView* view = current_code_view())
+        return Cursor{view->kind() == CodeView::Kind::Pseudocode, view->current_token(),
+                      view->current_line_address()};
+    if (graph_ && tabs_->currentWidget() == graph_)
+        return Cursor{false, graph_->current_token(), graph_->current_line_address()};
+    return std::nullopt;
+}
+
+QString MainWindow::instruction_text(addr_t pc) {
+    const DiscoveredFunction* f = session_->function_at(pc);
+    const std::string* raw = f ? raw_disassembly(f->addr) : nullptr;
+    if (!raw) return {};
+    for (std::string_view line : split_lines(*raw)) {
+        const auto insn = parse_raw_insn(line);
+        if (!insn || insn->addr != pc) continue;
+        return QStringLiteral("%1 %2")
+            .arg(QString::fromUtf8(insn->mnemonic.data(), static_cast<qsizetype>(insn->mnemonic.size())),
+                 QString::fromUtf8(insn->operands.data(), static_cast<qsizetype>(insn->operands.size())))
+            .trimmed();
+    }
+    return {};
 }
 
 std::optional<addr_t> MainWindow::resolve_token(const QString& token) const {
@@ -1300,17 +1468,18 @@ std::optional<addr_t> MainWindow::resolve_token(const QString& token) const {
 }
 
 void MainWindow::rename_at_cursor() {
-    CodeView* view = current_code_view();
-    if (!session_ || !view) return;
-    std::optional<addr_t> target = resolve_token(view->current_token());
+    const auto at = cursor();
+    if (!session_ || !at) return;
+    std::optional<addr_t> target = resolve_token(at->token);
     if (!target) {
-        if (view->kind() == CodeView::Kind::Pseudocode && !view->current_token().isEmpty()) {
-            log(QStringLiteral("Renaming local variables is not supported yet; "
-                               "put the cursor on a function or global name."));
+        // In pseudocode a name with no address is the function's own:
+        // a local, a parameter or a temporary.
+        if (at->pseudocode && !at->token.isEmpty()) {
+            rename_local(at->token);
             return;
         }
         // IDA names the address of the current line.
-        target = view->current_line_address();
+        target = at->address;
     }
     if (!target) return;
     const std::string current = session_->name_at(*target);
@@ -1340,10 +1509,67 @@ void MainWindow::rename_at_cursor() {
     refresh_views(true);
 }
 
+void MainWindow::rename_local(const QString& shown) {
+    if (!current_fn_) return;
+    const auto rendered = pseudo_cache_.find(*current_fn_);
+    if (rendered == pseudo_cache_.end()) return;
+    static const QRegularExpression identifier(QStringLiteral(R"(^[A-Za-z_]\w*$)"));
+    static const QStringList kReserved = {
+        QStringLiteral("if"), QStringLiteral("else"), QStringLiteral("while"), QStringLiteral("for"),
+        QStringLiteral("do"), QStringLiteral("return"), QStringLiteral("switch"), QStringLiteral("case"),
+        QStringLiteral("default"), QStringLiteral("break"), QStringLiteral("continue"),
+        QStringLiteral("goto"), QStringLiteral("sizeof"), QStringLiteral("struct"),
+        QStringLiteral("union"), QStringLiteral("enum"), QStringLiteral("const"),
+        QStringLiteral("static"), QStringLiteral("void"), QStringLiteral("char"),
+        QStringLiteral("short"), QStringLiteral("int"), QStringLiteral("long"),
+        QStringLiteral("unsigned"), QStringLiteral("signed"), QStringLiteral("float"),
+        QStringLiteral("double"), QStringLiteral("bool"), QStringLiteral("true"),
+        QStringLiteral("false"), QStringLiteral("NULL"),
+    };
+    const QString& text = rendered->second.text;
+    const auto usable = [&](const QString& name) {
+        if (!identifier.match(name).hasMatch() || kReserved.contains(name) || name.endsWith(QStringLiteral("_t")) ||
+            name.startsWith(QStringLiteral("__"))) return false;
+        // Call targets without an address (helpers, intrinsics) are not variables.
+        const QRegularExpression call(QStringLiteral(R"(\b%1\s*\()").arg(QRegularExpression::escape(name)));
+        return !text.contains(call);
+    };
+    if (!usable(shown)) {
+        log(QStringLiteral("'%1' is not a variable of this function.").arg(shown));
+        return;
+    }
+    const std::string emitted = session_->emitted_local(*current_fn_, shown.toStdString());
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, QStringLiteral("Rename local variable"),
+        QStringLiteral("Please enter a new name for %1\n(empty restores %2)")
+            .arg(shown, QString::fromStdString(emitted)),
+        QLineEdit::Normal, shown, &ok).trimmed();
+    if (!ok || name == shown) return;
+    if (!name.isEmpty()) {
+        if (!usable(name)) {
+            QMessageBox::warning(this, QStringLiteral("Rename local variable"),
+                                 QStringLiteral("'%1' is not a valid variable name.").arg(name));
+            return;
+        }
+        const QRegularExpression word(QStringLiteral(R"(\b%1\b)").arg(QRegularExpression::escape(name)));
+        if (name.toStdString() != emitted && text.contains(word)) {
+            QMessageBox::warning(this, QStringLiteral("Rename local variable"),
+                                 QStringLiteral("The name '%1' is already used in this function.").arg(name));
+            return;
+        }
+    }
+    session_->rename_local(*current_fn_, emitted, name.toStdString());
+    log(name.isEmpty() ? QStringLiteral("%1: restored.").arg(QString::fromStdString(emitted))
+                       : QStringLiteral("%1: renamed to %2.").arg(shown, name));
+    save_database();
+    refresh_views(true);
+}
+
 void MainWindow::comment_at_cursor() {
-    CodeView* view = current_code_view();
-    if (!session_ || !view) return;
-    const auto va = view->current_line_address();
+    const auto at = cursor();
+    if (!session_ || !at) return;
+    const auto va = at->address;
     if (!va) return;
     auto& notes = session_->annotations.notes;
     const auto it = notes.find(*va);
@@ -1359,10 +1585,10 @@ void MainWindow::comment_at_cursor() {
 }
 
 void MainWindow::show_xrefs(bool current_item) {
-    CodeView* view = current_code_view();
+    const auto at = cursor();
     if (!session_) return;
     std::optional<addr_t> target;
-    if (view && !current_item) target = resolve_token(view->current_token());
+    if (at && !current_item) target = resolve_token(at->token);
     if (!target && current_fn_) target = current_fn_;
     if (!target) return;
     if (!session_->xrefs_ready) {
@@ -1407,6 +1633,15 @@ void MainWindow::show_xrefs(bool current_item) {
             }
         }
         if (!found && fn != session_->function_at(*target)->addr) add(fn, QStringLiteral("p"), {});
+    }
+    // Reads, writes and address-taking (IDA's r / w / o).
+    if (const auto refs = session_->data_refs.find(*target); refs != session_->data_refs.end()) {
+        for (const DataXref& ref : refs->second) {
+            const QString type = ref.kind == DataXrefKind::Read    ? QStringLiteral("r")
+                               : ref.kind == DataXrefKind::Write   ? QStringLiteral("w")
+                                                                   : QStringLiteral("o");
+            add(ref.from_pc, type, instruction_text(ref.from_pc));
+        }
     }
     // Data references to strings, from the string scan's xref lists.
     if (session_->strings) {
@@ -1522,10 +1757,10 @@ void MainWindow::toggle_view() {
 }
 
 void MainWindow::toggle_number() {
-    CodeView* view = current_code_view();
-    if (!session_ || !view) return;
-    const QString tok = view->current_token();
-    const auto va = view->current_line_address();
+    const auto at = cursor();
+    if (!session_ || !at) return;
+    const QString tok = at->token;
+    const auto va = at->address;
     if (tok.isEmpty() || !va) return;
     auto& toggles = number_toggles_[*va];
     // Toggling a shown replacement restores the original literal.
@@ -1574,7 +1809,7 @@ MainWindow::Rendered MainWindow::decorate_pseudocode(const Rendered& raw) const 
         if (auto note = notes.find(va); note != notes.end() && commented.insert(va).second)
             lines[i] += QStringLiteral(" // ") + QString::fromStdString(note->second);
     }
-    return Rendered{lines.join(QLatin1Char('\n')), raw.lines};
+    return Rendered{lines.join(QLatin1Char('\n')), raw.lines, {}};
 }
 
 void MainWindow::refresh_views(bool names_changed) {
@@ -1614,6 +1849,17 @@ void MainWindow::refresh_views(bool names_changed) {
         } else {
             request_pseudocode(*win);
         }
+    }
+    if (graph_ && fn && graph_fn_ == fn->addr) {
+        const auto va = graph_->current_line_address();
+        const QTransform zoom = graph_->transform();
+        const int h = graph_->horizontalScrollBar()->value();
+        const int v = graph_->verticalScrollBar()->value();
+        render_graph(*fn);
+        graph_->setTransform(zoom);
+        if (va) graph_->go_to_address(*va, /*center=*/false);
+        graph_->horizontalScrollBar()->setValue(h);
+        graph_->verticalScrollBar()->setValue(v);
     }
     if (current_fn_) update_chrome(disasm_ && disasm_->current_line_address()
                                        ? *disasm_->current_line_address() : *current_fn_);

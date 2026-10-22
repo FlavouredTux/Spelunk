@@ -27,9 +27,19 @@ int main(int argc, char** argv) {
                                    QStringLiteral("Open the pseudocode view before the screenshot."));
     QCommandLineOption hex(QStringLiteral("hex"),
                            QStringLiteral("Open the hex dump view before the screenshot."));
+    QCommandLineOption graph(QStringLiteral("graph"),
+                             QStringLiteral("Open the graph view before the screenshot."));
+    QCommandLineOption at(QStringLiteral("at"),
+                          QStringLiteral("Jump to <name> or address before the screenshot."),
+                          QStringLiteral("name"));
     parser.addOption(screenshot);
     parser.addOption(pseudocode);
     parser.addOption(hex);
+    QCommandLineOption fit(QStringLiteral("fit"),
+                           QStringLiteral("With --graph: fit the whole graph in the window."));
+    parser.addOption(graph);
+    parser.addOption(fit);
+    parser.addOption(at);
     parser.process(app);
 
     // Fusion with its stock light palette is the closest built-in match
@@ -65,14 +75,19 @@ int main(int argc, char** argv) {
         const QString out = parser.value(screenshot);
         const bool want_pseudo = parser.isSet(pseudocode);
         const bool want_hex = parser.isSet(hex);
+        const bool want_graph = parser.isSet(graph);
+        const bool want_fit = parser.isSet(fit);
+        const QString target = parser.value(at);
         QObject::connect(&window, &spelunk::gui::MainWindow::analysis_finished, &window,
-                          [&window, out, want_pseudo, want_hex] {
+                          [&window, out, want_pseudo, want_hex, want_graph, want_fit, target] {
             const auto save = [&window, out] {
                 QTimer::singleShot(250, &window, [&window, out] {
                     const bool ok = window.grab().save(out);
                     QApplication::exit(ok ? 0 : 2);
                 });
             };
+            if (!target.isEmpty()) window.jump_for_test(target);
+            if (want_graph) window.open_graph_for_test(want_fit);
             if (want_pseudo && !want_hex) {
                 QObject::connect(&window, &spelunk::gui::MainWindow::pseudocode_ready,
                                  &window, save, Qt::SingleShotConnection);

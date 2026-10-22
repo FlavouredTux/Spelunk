@@ -16,8 +16,10 @@ existing `<binary>.spelunk-annotations` sidecar, then the annotation cache.
 
 The Qt GUI loads the same sidecar or cache when opening a binary. Saved
 function names appear in the function list and navigation; signatures and
-field annotations are used in the pseudo-C view. Reopen the binary after
-changing annotations externally.
+field annotations are used in the pseudo-C view. Pressing N on a local,
+parameter or temporary in the GUI's pseudocode saves an `lvar` record, which
+`spelunk -p` applies too. Reopen the binary after changing annotations
+externally.
 
 ```sh
 spelunk --list-annotations --annotations project.annotations ./target
@@ -41,8 +43,14 @@ sig    <hex-addr>  <return-type>|<param-type>|<param-name>|...
 note   <hex-addr>  <text>
 const  <hex-value> <name>
 field  <hex-addr>  <param-index>|<hex-offset>|<field-name>
+lvar   <hex-addr>  <emitted-name>|<new-name>
 meta   <kind> <hex-addr> conf=<float>|src=<tag>|ev=<text>
 ```
+
+`lvar` renames a name the pseudo-C emitter invents inside the function at
+`<hex-addr>` (`local_28`, `a1`, `t17`, ...), keyed by the name as emitted.
+Only code tokens change; strings, comments and member names after `.` or
+`->` keep their text.
 
 `meta` carries provenance for one of the records above; `<kind>` is
 `rename`, `note`, or `sig`. Pipes are the field separator inside the

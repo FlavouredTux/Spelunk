@@ -21,10 +21,12 @@
 
 #include "../src/chooser.hpp"
 #include "../src/code_view.hpp"
+#include "../src/graph_view.hpp"
 #include "../src/main_window.hpp"
 
 using spelunk::gui::Chooser;
 using spelunk::gui::CodeView;
+using spelunk::gui::GraphView;
 using spelunk::gui::MainWindow;
 
 namespace {
@@ -79,6 +81,15 @@ void press(QWidget* view, Qt::Key key, Qt::KeyboardModifiers mods = Qt::NoModifi
     QTest::keyClick(view, key, mods);
 }
 
+bool database_contains(const QTemporaryDir& cache, const QByteArray& needle) {
+    QDirIterator it(cache.path(), QDir::Files, QDirIterator::Subdirectories);
+    while (it.hasNext()) {
+        QFile file(it.next());
+        if (file.open(QIODevice::ReadOnly) && file.readAll().contains(needle)) return true;
+    }
+    return false;
+}
+
 // Put the cursor on the first occurrence of `needle` in a line matching `line_has`.
 bool place_cursor(CodeView* view, const QString& line_has, const QString& needle) {
     for (QTextBlock b = view->document()->begin(); b.isValid(); b = b.next()) {
@@ -103,7 +114,7 @@ QString line_with(CodeView* view, const QString& needle) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) return 2;
+    if (argc != 2 && argc != 3) return 2;
     QTemporaryDir cache;
     qputenv("XDG_CACHE_HOME", cache.path().toUtf8());
     qputenv("QT_QPA_PLATFORM", "offscreen");
@@ -152,15 +163,7 @@ int main(int argc, char** argv) {
     press(disasm, Qt::Key_N);
     check(line_with(disasm, QStringLiteral("proc near")).contains(QStringLiteral("walk_list")),
           "N renames the function in the listing");
-    bool saved = false;
-    {
-        QDirIterator it(cache.path(), QDir::Files, QDirIterator::Subdirectories);
-        while (it.hasNext()) {
-            QFile file(it.next());
-            if (file.open(QIODevice::ReadOnly) && file.readAll().contains("walk_list")) saved = true;
-        }
-    }
-    check(saved, "rename is saved to the annotation database");
+    check(database_contains(cache, "walk_list"), "rename is saved to the annotation database");
 
     // ; adds a comment on the current line.
     check(place_cursor(disasm, QStringLiteral("add     "), QStringLiteral("add")), "cursor on an instruction");
@@ -209,6 +212,60 @@ int main(int argc, char** argv) {
     press(disasm, Qt::Key_Escape);
     check(line_with(disasm, QStringLiteral("proc near")).contains(QStringLiteral("walk_list")),
           "Esc goes back");
+
+    // Space flips to the graph of the same function and back.
+    press(disasm, Qt::Key_Space);
+    check(current_title(window) == QStringLiteral("Spelunk Graph-A"), "Space opens the graph view");
+    auto* graph = window.findChild<GraphView*>();
+    check(graph && graph->block_count() >= 3 && graph->edge_count() >= 3,
+          "graph shows the function's blocks and edges");
+    check(graph && graph->current_line_address().has_value(), "graph selects a line");
+    if (graph) press(graph, Qt::Key_Space);
+    check(current_title(window) == QStringLiteral("Spelunk View-A"), "Space returns to the listing");
+
+    // N on a local in the pseudocode renames it within this function.
+    press(disasm, Qt::Key_Tab);
+    pseudo = tab_view(window, QStringLiteral("Pseudocode-A"));
+    check(pseudo && place_cursor(pseudo, QStringLiteral("uint64_t value"), QStringLiteral("value")),
+          "cursor on a local variable");
+    if (pseudo) {
+        QSignalSpy rerendered(&window, &MainWindow::pseudocode_ready);
+        answer_text(QStringLiteral("total"));
+        press(pseudo, Qt::Key_N);
+        check(rerendered.count() > 0 || rerendered.wait(30000), "pseudocode re-renders after the rename");
+        check(!line_with(pseudo, QStringLiteral("uint64_t total = 0")).isEmpty() &&
+                  line_with(pseudo, QStringLiteral("value")).isEmpty(),
+              "N renames the local everywhere in the function");
+        check(database_contains(cache, "lvar "), "local rename is saved to the annotation database");
+        press(pseudo, Qt::Key_Tab);
+    }
+
+    // X on a data address lists the instructions that read it.
+    if (argc == 3) {
+        QSignalSpy second(&window, &MainWindow::analysis_finished);
+        window.open_path(QString::fromLocal8Bit(argv[2]));
+        check(second.wait(30000), "second binary loads");
+        disasm = tab_view(window, QStringLiteral("Spelunk View-A"));
+        if (disasm) {
+            answer_text(QStringLiteral("main"));
+            press(disasm, Qt::Key_G);
+            check(place_cursor(disasm, QStringLiteral("stderr"), QStringLiteral("0x")),
+                  "cursor on a data address");
+            int rows = -1;
+            bool read = false;
+            on_next_modal([&rows, &read](QWidget* w) {
+                if (auto* chooser = qobject_cast<Chooser*>(w)) {
+                    const QAbstractItemModel* model = chooser->findChild<QTableView*>()->model();
+                    rows = model->rowCount();
+                    for (int r = 0; r < rows; ++r)
+                        read |= model->index(r, 2).data().toString() == QStringLiteral("r");
+                    chooser->reject();
+                }
+            });
+            press(disasm, Qt::Key_X);
+            check(rows > 0 && read, "X lists data reads of a global");
+        }
+    }
 
     if (failures) {
         for (auto* edit : window.findChildren<QPlainTextEdit*>())

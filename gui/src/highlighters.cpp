@@ -18,8 +18,9 @@ QTextCharFormat colour(const QColor& c) {
 // Disassembly
 // ---------------------------------------------------------------------------
 
-AsmHighlighter::AsmHighlighter(QTextDocument* doc)
+AsmHighlighter::AsmHighlighter(QTextDocument* doc, bool prefixed)
     : QSyntaxHighlighter(doc),
+      prefixed_(prefixed),
       prefix_(colour(theme::kPrefix)),
       bytes_(colour(theme::kBytes)),
       mnemonic_(colour(theme::kMnemonic)),
@@ -41,13 +42,16 @@ AsmHighlighter::AsmHighlighter(QTextDocument* doc)
       name_re_(QStringLiteral(R"(\b[A-Za-z_][\w@$.]*\b)")) {}
 
 void AsmHighlighter::highlightBlock(const QString& text) {
-    const auto p = prefix_re_.match(text);
-    if (!p.hasMatch()) {
-        if (text.trimmed().startsWith(QLatin1Char(';'))) setFormat(0, static_cast<int>(text.size()), comment_);
-        return;
+    int base = 0;
+    if (prefixed_) {
+        const auto p = prefix_re_.match(text);
+        if (!p.hasMatch()) {
+            if (text.trimmed().startsWith(QLatin1Char(';'))) setFormat(0, static_cast<int>(text.size()), comment_);
+            return;
+        }
+        base = static_cast<int>(p.capturedLength(0));
+        setFormat(0, base, prefix_);
     }
-    const int base = static_cast<int>(p.capturedLength(0));
-    setFormat(0, base, prefix_);
     const QString rest = text.mid(base);
     if (rest.trimmed().isEmpty()) return;
     if (rest.trimmed().startsWith(QLatin1Char(';'))) {

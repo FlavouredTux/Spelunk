@@ -4,6 +4,7 @@
 #include <QString>
 #include <functional>
 #include <map>
+#include <string>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -24,6 +25,7 @@ class QThread;
 
 namespace spelunk {
 struct FuncWindow;
+struct DataXref;
 struct DiscoveredFunction;
 }  // namespace spelunk
 
@@ -32,6 +34,7 @@ namespace spelunk::gui {
 struct Session;
 class CodeView;
 class FunctionModel;
+class GraphView;
 class HexView;
 class NavBand;
 
@@ -47,6 +50,10 @@ public:
     void open_pseudocode_for_test() { open_pseudocode(); }
     // Test hook for --screenshot --hex; same as pressing H.
     void open_hex_for_test() { open_hex(); }
+    // Test hook for --screenshot --graph; same as pressing Space.
+    void open_graph_for_test(bool fit);
+    // Test hook for --screenshot --at; same as typing in the command line.
+    void jump_for_test(const QString& token) { jump_to_token(token); }
 
 signals:
     // Fired once the file is loaded and the first view is showing.
@@ -60,6 +67,15 @@ private:
     struct Rendered {
         QString             text;
         std::vector<addr_t> lines;   // one entry per document line, 0 = none
+        // Disassembly only: each instruction as a graph block line shows it
+        // (mnemonic, operands and comments, no prefix or name column).
+        std::unordered_map<addr_t, QString> graph_lines;
+    };
+    // What the focused code view (text or graph) has under its cursor.
+    struct Cursor {
+        bool                  pseudocode = false;
+        QString               token;
+        std::optional<addr_t> address;
     };
 
     // construction
@@ -76,6 +92,7 @@ private:
     void start_xref_analysis();
     void on_xrefs_ready(const std::shared_ptr<Session>& s,
                         std::shared_ptr<std::unordered_map<addr_t, std::vector<addr_t>>> callers,
+                        std::shared_ptr<std::map<addr_t, std::vector<DataXref>>> data_refs,
                         std::size_t edges, qint64 ms);
     void close_session();
     void log(const QString& line);
@@ -111,6 +128,10 @@ private:
     CodeView* ensure_disassembly_tab();
     CodeView* ensure_pseudocode_tab();
     HexView* ensure_hex_tab();
+    GraphView* ensure_graph_tab();
+    // Lay out the control-flow graph of `fn` in the graph tab.
+    void       render_graph(const DiscoveredFunction& fn);
+    void       toggle_graph();
     void      open_pseudocode();
     void      open_hex();
     void      open_strings();
@@ -123,6 +144,7 @@ private:
 
     // IDA editing / analysis commands
     void rename_at_cursor();
+    void rename_local(const QString& shown);
     void comment_at_cursor();
     void show_xrefs(bool current_item);
     void toggle_view();
@@ -133,6 +155,9 @@ private:
     void focus_filter();
 
     CodeView* current_code_view() const;
+    [[nodiscard]] std::optional<Cursor> cursor() const;
+    // `mnemonic operands` of the instruction at `pc`, as the listing shows it.
+    [[nodiscard]] QString instruction_text(addr_t pc);
     // Address named by an identifier or literal, if it denotes one.
     [[nodiscard]] std::optional<addr_t> resolve_token(const QString& token) const;
     [[nodiscard]] const std::string* raw_disassembly(addr_t fn);
@@ -158,6 +183,7 @@ private:
     std::unordered_map<addr_t, Rendered> pseudo_cache_;
     std::unordered_set<addr_t> pseudo_pending_;
     std::optional<addr_t>                current_fn_;
+    std::optional<addr_t>                graph_fn_;   // function the graph tab shows
     std::vector<addr_t>                  history_;
     std::size_t                          history_pos_ = 0;
 
@@ -166,6 +192,7 @@ private:
     CodeView*              disasm_    = nullptr;
     CodeView*              pseudo_    = nullptr;
     HexView*               hex_       = nullptr;
+    GraphView*             graph_     = nullptr;
     FunctionModel*         fn_model_  = nullptr;
     QSortFilterProxyModel* fn_proxy_  = nullptr;
     QTableView*            fn_table_  = nullptr;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -9,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <spelunk/analysis/data_xrefs.hpp>
 #include <spelunk/analysis/pipeline.hpp>
 #include <spelunk/analysis/strings.hpp>
 #include <spelunk/binary/binary.hpp>
@@ -44,6 +46,9 @@ struct Session {
     // MainWindow::start_xref_analysis) and installed from the GUI thread,
     // so readers never race the builder. Empty until `xrefs_ready`.
     std::unordered_map<addr_t, std::vector<addr_t>> callers;
+    // Reads, writes and address-taking of data (and of code, through
+    // `lea`), by target. Built and installed alongside `callers`.
+    std::map<addr_t, std::vector<DataXref>> data_refs;
     bool xrefs_ready = false;
 
     [[nodiscard]] std::span<const addr_t> callers_of(addr_t fn) const noexcept;
@@ -65,6 +70,12 @@ struct Session {
 
     // User rename; an empty name restores the analysis name.
     void rename(addr_t va, const std::string& name);
+    // Rename a name the pseudocode invents inside function `fn` (a local,
+    // parameter or temporary), keyed by the name as emitted. An empty name
+    // or the emitted name itself restores it.
+    void rename_local(addr_t fn, const std::string& emitted, const std::string& name);
+    // Name as emitted for `shown` in function `fn`: undoes a local rename.
+    [[nodiscard]] std::string emitted_local(addr_t fn, const std::string& shown) const;
     // Name to show for `va`: user rename, else function name, else empty.
     [[nodiscard]] std::string name_at(addr_t va) const;
     [[nodiscard]] Result<void> save_annotations() const;

@@ -74,6 +74,21 @@ void Session::rename(addr_t va, const std::string& name) {
     }
 }
 
+void Session::rename_local(addr_t fn, const std::string& emitted, const std::string& name) {
+    auto& names = annotations.local_names[fn];
+    if (name.empty() || name == emitted) names.erase(emitted);
+    else names[emitted] = name;
+    if (names.empty()) annotations.local_names.erase(fn);
+}
+
+std::string Session::emitted_local(addr_t fn, const std::string& shown) const {
+    if (const auto names = annotations.local_names.find(fn); names != annotations.local_names.end()) {
+        for (const auto& [emitted, name] : names->second)
+            if (name == shown) return emitted;
+    }
+    return shown;
+}
+
 std::string Session::name_at(addr_t va) const {
     if (const auto* n = annotations.name_for(va)) return *n;
     auto it = std::lower_bound(functions.begin(), functions.end(), va,

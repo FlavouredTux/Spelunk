@@ -522,11 +522,41 @@ void lift_setcc(LiftCtx& ctx, Mnemonic mn) {
     store_lvalue(insn.operands[0], byte, ctx);
 }
 
-// String ops: implicit rdi/rsi/rcx/rax operands. Model as an intrinsic that
-// reads those registers and then clobbers rdi/rsi/rcx (and rax for scas/lods).
-// Keeps liveness honest without trying to model the exact `rep`-loop semantics.
+// String ops: implicit rdi/rsi/rcx/rax operands. Without REP, MOVS/STOS/LODS
+// move one element. REP MOVS/STOS become an intrinsic that runs to
+// completion: the pointers end past the block and the count is spent, which
+// matters because MSVC's inline memcpy is `rep movsd` then `rep movsb`
+// continuing from where the first stopped. REPE/REPNE CMPS/SCAS can stop
+// early, so they clobber rdi/rsi/rcx (and rax) instead.
 void lift_string_op(LiftCtx& ctx, std::string_view name,
                     bool touches_rsi, bool touches_rax) {
+    const auto& insn = *ctx.insn;
+    const i64 element = name.ends_with('b') ? 1 : name.ends_with('w') ? 2
+        : name.ends_with('d') ? 4 : 8;
+    const bool copy = name.find("movs") != std::string_view::npos;
+    const bool fill = name.find("stos") != std::string_view::npos;
+    const bool load = name.find("lods") != std::string_view::npos;
+    const Reg accumulator = element == 1 ? Reg::Al : element == 2 ? Reg::Ax
+        : element == 4 ? Reg::Eax : Reg::Rax;
+    const IrType element_type = type_for_bits(static_cast<unsigned>(element) * 8);
+    const auto advance = [&](Reg r, IrValue bytes) {
+        ctx.write_reg(r, ctx.emit_binop(IrOp::Add, ctx.read_reg(r), bytes));
+    };
+    if (!insn.prefixes.rep && !insn.prefixes.repne && (copy || fill || load)) {
+        const IrValue step = ctx.imm(element, ctx.word_type());
+        if (copy) {
+            const IrValue value = ctx.emit_load(ctx.read_reg(Reg::Rsi), element_type);
+            ctx.emit_store(ctx.read_reg(Reg::Rdi), value);
+        } else if (fill) {
+            ctx.emit_store(ctx.read_reg(Reg::Rdi), ctx.read_reg(accumulator));
+        } else {
+            ctx.write_reg(accumulator, ctx.emit_load(ctx.read_reg(Reg::Rsi), element_type));
+        }
+        if (copy || fill) advance(Reg::Rdi, step);
+        if (copy || load) advance(Reg::Rsi, step);
+        return;
+    }
+
     IrInst i;
     i.op   = IrOp::Intrinsic;
     i.name = std::string(name);
@@ -534,7 +564,17 @@ void lift_string_op(LiftCtx& ctx, std::string_view name,
     i.srcs[1]   = touches_rsi ? ctx.read_reg(Reg::Rsi) : ctx.read_reg(Reg::Rax);
     i.srcs[2]   = ctx.read_reg(Reg::Rcx);
     i.src_count = 3;
+    const IrValue count = i.srcs[2];
     ctx.emit(std::move(i));
+
+    if (copy || fill) {
+        const IrValue bytes = element == 1 ? count
+            : ctx.emit_binop(IrOp::Mul, count, ctx.imm(element, ctx.word_type()));
+        advance(Reg::Rdi, bytes);
+        if (copy) advance(Reg::Rsi, bytes);
+        ctx.write_reg(Reg::Rcx, ctx.imm(0, ctx.word_type()));
+        return;
+    }
 
     auto clobber = [&](Reg r) {
         IrInst c;

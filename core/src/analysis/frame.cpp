@@ -1,6 +1,7 @@
 #include <spelunk/analysis/frame.hpp>
 
 #include <array>
+#include <bit>
 #include <format>
 #include <limits>
 #include <map>
@@ -88,6 +89,17 @@ trace_stack(const IrValue& v, const DefMap& defs, int depth = 0) {
             if (lhs && d->srcs[1].kind == IrValueKind::Imm) {
                 return *lhs - d->srcs[1].imm;
             }
+            return std::nullopt;
+        }
+        case IrOp::And: {
+            // `and rsp, -N` frame realignment, offsets assuming an aligned
+            // entry pointer like Emitter::is_stack_realignment.
+            if (d->src_count < 2 || d->srcs[1].kind != IrValueKind::Imm) return std::nullopt;
+            const i64 mask = d->srcs[1].imm;
+            if (mask >= 0 || mask < -4096 || !std::has_single_bit(static_cast<u64>(-mask)))
+                return std::nullopt;
+            auto lhs = trace_stack(d->srcs[0], defs, depth + 1);
+            if (lhs) return *lhs & mask;
             return std::nullopt;
         }
         default:

@@ -116,14 +116,21 @@ std::optional<std::pair<std::string, std::string>>
 Emitter::unaligned_vector_access(const IrValue& addr, IrType type, Reg segment) const {
     // `*(__m128i*)p` claims 16-byte alignment, so a C compiler may emit
     // movdqa where the binary used movdqu. Vector memory goes through the
-    // unaligned intrinsics; stack slots are declared with their own type.
+    // unaligned intrinsics; stack slots are declared with their own type,
+    // unless the access lands inside wider byte storage.
     const unsigned bits = type_bits(type);
     if (options.c_source || segment != Reg::None || (bits != 128 && bits != 256) ||
-        is_float_type(type) || stack_offset(addr) || try_resolve_imm_addr(addr)) {
+        is_float_type(type) || try_resolve_imm_addr(addr)) {
         return std::nullopt;
     }
-    const std::string pointer = std::format("({}*)({})", bits == 128 ? "__m128i" : "__m256i",
-                                            expr(addr));
+    const char* vector = bits == 128 ? "__m128i" : "__m256i";
+    std::string pointer;
+    if (auto offset = stack_offset(addr)) {
+        if (stack_storage_access(*offset, type, vector).empty()) return std::nullopt;
+        pointer = std::format("({}*)({})", vector, stack_address_expr(*offset, &addr));
+    } else {
+        pointer = std::format("({}*)({})", vector, expr(addr));
+    }
     return std::pair{pointer, std::string(bits == 128 ? "_mm_storeu_si128" : "_mm256_storeu_si256")};
 }
 
@@ -665,9 +672,14 @@ std::string Emitter::format_store(const IrInst& inst) const {
             : std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val));
         return std::format("spelunk_write_{}({}, {});", c_memory_suffix(val.type), c_address(addr), value);
     }
-    if (auto unaligned = unaligned_vector_access(addr, val.type, inst.segment)) {
+    const auto store_unaligned = [&]() -> std::optional<std::string> {
+        auto unaligned = unaligned_vector_access(addr, val.type, inst.segment);
+        if (!unaligned) return std::nullopt;
         return std::format("{}({}, {});", unaligned->second, unaligned->first,
                            adapt_vector_lane(val, expr(val)));
+    };
+    if (inst.segment != Reg::None || !stack_offset(addr)) {
+        if (auto statement = store_unaligned()) return *statement;
     }
     std::string lhs;
     if (inst.segment == Reg::None) {
@@ -685,6 +697,7 @@ std::string Emitter::format_store(const IrInst& inst) const {
                     !it->second.type_override.empty();
                 if (!user_named) return "";
             }
+            if (auto statement = store_unaligned()) return *statement;
             if (auto field = imported_stack_field(*off, val.type); field) {
                 lhs = *field;
             } else if (auto interior = stack_storage_access(*off, val.type);
@@ -1006,8 +1019,10 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // Low-byte boolean merges (`x & ~0xff | bool`) are usually
                 // compiler plumbing before a byte test. Rendering the carrier
                 // temp as `tN = ...` leaves dead-looking noise after the
-                // condition itself has simplified.
-                if (match_low_byte_setcc_merge(inst.dst)) return "";
+                // condition itself has simplified. A carrier read more than
+                // once (an adc chain's `zext carry`) renders by name, so it
+                // still needs its binding.
+                if (match_low_byte_setcc_merge(inst.dst) && should_inline(inst.dst)) return "";
                 const std::string type = c_type_name_for(inst.dst);
                 std::string initializer = expand(inst, 0);
                 if (type.ends_with('*') && (options.c_source || declared_pointer_type(inst.dst) != type) &&

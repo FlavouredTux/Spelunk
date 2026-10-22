@@ -70,6 +70,7 @@ static bool parity(void) { return false; }
 static bool overflow_add(uint32_t a, uint32_t b) {
     return ((~(a ^ b) & (a ^ (a + b))) >> 31) != 0;
 }
+static bool carry_add(uint64_t a, uint64_t b) { return a + b < a; }
 #define ROTATE(W,T) \
 static T rotr##W(T a, uint64_t n) { n %= W; return n ? (T)(((uint64_t)a >> n) | ((uint64_t)a << (W-n))) : a; } \
 static T rotl##W(T a, uint64_t n) { n %= W; return n ? (T)(((uint64_t)a << n) | ((uint64_t)a >> (W-n))) : a; }
@@ -183,8 +184,13 @@ def main(directory):
             cases.append(Case('loop_copy_string', (64, 8, 0x5a), bytes(text), (0, 1)))
         for n in [0, 1, 2, 5, 17, MASK]:
             cases.append(Case('loop_mix_keep_start', (8, n, 0x3c), initial, (0,)))
+        for k in [0, 1, MASK]:
+            cases.append(Case('carry_chain', (16, 16, k), initial, (0, 1)))
+            cases.append(Case('realigned_frame', (16, 16, k), initial, (0, 1)))
     for flag in [0, 1]:
         cases.append(Case('loop_string_bound', (0, flag, 9)))
+    # All-ones words carry through every limb.
+    cases.append(Case('carry_chain', (16, 16, 5), bytes([0xff]) * 128, (0, 1)))
     names = sorted({case.name for case in cases})
 
     code = HELPERS

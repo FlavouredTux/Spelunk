@@ -131,3 +131,26 @@ uint64_t loop_copy_string(unsigned char* dst, const unsigned char* src, uint64_t
     *dst = (unsigned char)extra;
     return (uint64_t)(dst - start) + (uint64_t)(src - start);
 }
+
+/* A two-word add whose middle carry feeds both the stored sum and the
+ * outgoing carry: the carry temp must be declared before either use. */
+uint64_t carry_chain(uint64_t* out, const uint64_t* in, uint64_t k) {
+    unsigned __int128 s = (unsigned __int128)in[0] + in[2];
+    unsigned __int128 t = (unsigned __int128)in[1] + in[3] + (uint64_t)(s >> 64);
+    out[4] = (uint64_t)s;
+    out[5] = (uint64_t)t;
+    return (uint64_t)(t >> 64) + k;
+}
+/* `and rsp, -32` realigns the frame; its slots still need declarations.
+ * No canary: the IR probe knows no __stack_chk_fail. */
+__attribute__((no_stack_protector))
+uint64_t realigned_frame(uint64_t* out, const uint64_t* in, uint64_t k) {
+    _Alignas(32) volatile uint64_t r[4];
+    r[0] = in[0] * (k | 1);
+    r[1] = in[1] + k;
+    r[2] = in[2] ^ k;
+    r[3] = in[3] - k;
+    out[4] = r[0] ^ r[3];
+    out[5] = r[1] + r[2];
+    return r[0];
+}

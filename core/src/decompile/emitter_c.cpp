@@ -636,6 +636,7 @@ Emitter::c_undefined_register_declarations(std::string_view body) const {
     std::string out;
     const std::string code = code_only_text(body);
     std::set<std::string> declared;
+    const auto body_declared = declared_identifiers(body);
     for (unsigned r = 1; r < static_cast<unsigned>(Reg::Count); ++r) {
         const auto reg = static_cast<Reg>(r);
         const std::string_view type = register_c_type(reg_size(reg));
@@ -655,7 +656,7 @@ Emitter::c_undefined_register_declarations(std::string_view body) const {
             }
             if (end < code.size() && c_ident_char(code[end])) continue;
             std::string name(code, at, end - at);
-            if (text_declares_identifier(body, name)) continue;
+            if (body_declared.contains(name)) continue;
             declared.insert(std::move(name));
         }
     }

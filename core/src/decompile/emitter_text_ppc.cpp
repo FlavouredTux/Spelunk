@@ -7,6 +7,7 @@
 #include <charconv>
 #include <format>
 #include <map>
+#include <mutex>
 #include <regex>
 #include <set>
 #include <system_error>
@@ -225,7 +226,11 @@ std::string collapse_ppc_field_copy_runs(const std::string& text) {
         i64 source_offset = 0;
         i64 width = 0;
     };
-    const std::regex copy_pattern(
+    // std::regex fills libstdc++'s locale caches as it compiles and matches,
+    // which races when functions render in parallel: serialize its use.
+    static std::mutex regex_mutex;
+    const std::lock_guard regex_lock(regex_mutex);
+    static const std::regex copy_pattern(
         R"(^(\s*)(?:\*\([^)]*\)&)?([A-Za-z_][A-Za-z0-9_]*)->(byte|half|word|qword|float|double)_([0-9a-fA-F]+) = (?:\*\([^)]*\)&)?([A-Za-z_][A-Za-z0-9_]*)->(byte|half|word|qword|float|double)_([0-9a-fA-F]+);$)");
     const auto width_for = [](std::string_view prefix) -> i64 {
         if (prefix == "byte") return 1;

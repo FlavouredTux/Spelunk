@@ -7,10 +7,10 @@
 #include <functional>
 #include <map>
 #include <optional>
-#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -101,13 +101,45 @@ structurer_fail_markers(const StructuredFunction& sf, const Binary* binary) {
 
 // Stack slots handed by address to the PPC matrix helpers are Mtx34s,
 // whatever their observed access width says.
+// These two scans ran std::regex over every function body. Plain scanners
+// match the same text without regex's cost, or its locale-cache writes,
+// which race when functions render in parallel.
+
+// `PSMTX*(` / `C_MTX*(` / `QUATMtx(` calls: the last `&local_X` / `&arg_X`
+// before the statement or line ends.
 [[nodiscard]] std::set<std::string> matrix_stack_locals(const std::string& body) {
     std::set<std::string> out;
-    const std::regex matrix_call(
-        R"((?:PSMTX[A-Za-z0-9_]*|C_MTX[A-Za-z0-9_]*|QUATMtx)\([^;\n]*&((?:local|arg)_[0-9a-fA-F]+))");
-    for (std::sregex_iterator it(body.begin(), body.end(), matrix_call), end;
-         it != end; ++it) {
-        out.insert((*it)[1].str());
+    const auto is_hex = [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; };
+    const auto ident = [](char c) { return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_'; };
+    for (std::size_t i = 0; i < body.size();) {
+        std::size_t k = std::string::npos;
+        if (body.compare(i, 5, "PSMTX") == 0 || body.compare(i, 5, "C_MTX") == 0) {
+            k = i + 5;
+            while (k < body.size() && ident(body[k])) ++k;
+        } else if (body.compare(i, 7, "QUATMtx") == 0) {
+            k = i + 7;
+        }
+        if (k == std::string::npos || k >= body.size() || body[k] != '(') {
+            ++i;
+            continue;
+        }
+        const std::size_t segment = k + 1;
+        const std::size_t segment_end = std::min(body.find_first_of(";\n", segment), body.size());
+        std::size_t match_end = std::string::npos;
+        for (std::size_t p = segment_end; p-- > segment;) {
+            if (body[p] != '&') continue;
+            std::size_t q = p + 1;
+            if (body.compare(q, 6, "local_") == 0) q += 6;
+            else if (body.compare(q, 4, "arg_") == 0) q += 4;
+            else continue;
+            std::size_t digits = q;
+            while (digits < body.size() && is_hex(body[digits])) ++digits;
+            if (digits == q) continue;
+            out.insert(body.substr(p + 1, digits - p - 1));
+            match_end = digits;
+            break;
+        }
+        i = match_end != std::string::npos ? match_end : i + 1;
     }
     return out;
 }
@@ -115,12 +147,28 @@ structurer_fail_markers(const StructuredFunction& sf, const Binary* binary) {
 // `&fn /* 0x... */` in the body needs an extern declaration above it.
 void collect_address_taken_functions(Emitter& e, const std::string& body,
                                      const Binary* binary) {
-    const std::regex addressed_function(
-        R"(&([A-Za-z_][A-Za-z0-9_]*)\s*/\*\s*0x[0-9a-fA-F]+\s*\*/)");
-    for (std::sregex_iterator it(
-             body.begin(), body.end(), addressed_function), end;
-         it != end; ++it) {
-        const std::string name = (*it)[1].str();
+    const auto space = [&](std::size_t at) {
+        while (at < body.size() && std::isspace(static_cast<unsigned char>(body[at])) != 0) ++at;
+        return at;
+    };
+    for (std::size_t amp = body.find('&'); amp != std::string::npos; amp = body.find('&', amp + 1)) {
+        std::size_t at = amp + 1;
+        if (at >= body.size() ||
+            !(std::isalpha(static_cast<unsigned char>(body[at])) != 0 || body[at] == '_')) continue;
+        while (at < body.size() &&
+               (std::isalnum(static_cast<unsigned char>(body[at])) != 0 || body[at] == '_')) ++at;
+        const std::string name = body.substr(amp + 1, at - amp - 1);
+        at = space(at);
+        if (body.compare(at, 2, "/*") != 0) continue;
+        at = space(at + 2);
+        if (body.compare(at, 2, "0x") != 0) continue;
+        at += 2;
+        const std::size_t digits = at;
+        while (at < body.size() && std::isxdigit(static_cast<unsigned char>(body[at])) != 0) ++at;
+        if (at == digits) continue;
+        at = space(at);
+        if (body.compare(at, 2, "*/") != 0) continue;
+        amp = at + 1;
         if (binary) {
             const Symbol* symbol = binary->find_by_name(name);
             if (!symbol || symbol->kind != SymbolKind::Function) continue;
@@ -161,11 +209,11 @@ fallback_materializations(const Emitter& e, const std::string& body) {
         }
         return false;
     };
+    const auto declared = declared_identifiers(body);
     e.ssa_uses.for_each_definition([&](const SsaKey&, const IrInst* definition) {
         if (!definition || definition->dst.kind != IrValueKind::Temp) return;
         const std::string name = std::format("t{}", definition->dst.temp);
-        if (!identifiers.contains(std::string_view(name)) ||
-            text_declares_identifier(body, name)) return;
+        if (!identifiers.contains(std::string_view(name)) || declared.contains(name)) return;
         std::string initializer;
         if (auto key = ssa_key(definition->dst);
             key && e.memory_snapshot_loads.contains(*key) &&
@@ -385,23 +433,32 @@ frame_slot_declarations(const Emitter& e, const std::string& body,
 [[nodiscard]] std::string
 merge_local_declarations(const Emitter& e, const std::string& body) {
     std::string out;
-    const auto first_body_use_is_assignment = [&](const std::string& name) {
-        std::size_t start = 0;
-        while (start <= body.size()) {
-            std::size_t end = body.find('\n', start);
-            if (end == std::string::npos) end = body.size();
-            const std::string_view line(body.data() + start, end - start);
-            if (text_contains_identifier_in_code(line, name)) {
-                const std::string prefix = "  " + name + " =";
-                return line.starts_with(prefix);
-            }
-            if (end == body.size()) break;
-            start = end + 1;
+    // Where each identifier first appears in code (not comments or strings),
+    // from one scan: every merge local asks.
+    const std::string code = code_only_text(body);
+    std::unordered_map<std::string_view, std::size_t> first_line;
+    for (std::size_t pos = 0, line = 0; pos < code.size();) {
+        if (code[pos] == '\n') {
+            line = ++pos;
+            continue;
         }
-        return false;
+        if (!c_ident_char(code[pos])) {
+            ++pos;
+            continue;
+        }
+        const std::size_t begin = pos;
+        while (pos < code.size() && c_ident_char(code[pos])) ++pos;
+        first_line.try_emplace(std::string_view(code).substr(begin, pos - begin), line);
+    }
+    const auto first_body_use_is_assignment = [&](const std::string& name) {
+        const auto found = first_line.find(name);
+        if (found == first_line.end()) return false;
+        const std::size_t end = std::min(body.find('\n', found->second), body.size());
+        const std::string_view line(body.data() + found->second, end - found->second);
+        return line.starts_with("  " + name + " =");
     };
     for (const auto& [name, local] : e.merge_locals) {
-        if (!text_contains_identifier_in_code(body, name)) continue;
+        if (!first_line.contains(name)) continue;
         std::string type = e.c_type_name_for(local.type_value);
         if (local.initializer) {
             std::string initializer = e.expr(*local.initializer);
@@ -512,21 +569,51 @@ strip_dead_declarations(const Emitter& emitter, const std::string& out,
         name = line.substr(name_start, name_end - name_start);
         return true;
     };
+    // Per pass: the lines each code identifier appears on, and the indent of
+    // each line that closes a scope. A declaration is live when its name
+    // appears later before a line closes the declaration's scope.
+    std::vector<std::string> line_code;
+    std::unordered_map<std::string_view, std::vector<std::size_t>> appears_on;
+    std::vector<std::size_t> closing_indent;
+    const auto index_lines = [&] {
+        line_code.clear();
+        line_code.reserve(lines.size());
+        appears_on.clear();
+        closing_indent.assign(lines.size(), std::string::npos);
+        for (const auto& line : lines) line_code.push_back(code_only_text(line));
+        for (std::size_t li = 0; li < lines.size(); ++li) {
+            if (trim_line_view(lines[li]).starts_with('}'))
+                closing_indent[li] = lines[li].find_first_not_of(' ');
+            const std::string_view code = line_code[li];
+            for (std::size_t pos = 0; pos < code.size();) {
+                if (!c_ident_char(code[pos])) {
+                    ++pos;
+                    continue;
+                }
+                const std::size_t begin = pos;
+                while (pos < code.size() && c_ident_char(code[pos])) ++pos;
+                auto& on = appears_on[code.substr(begin, pos - begin)];
+                if (on.empty() || on.back() != li) on.push_back(li);
+            }
+        }
+    };
     auto name_appears_elsewhere = [&](const std::string& name,
                                       std::size_t skip_idx) {
         const std::size_t declaration_indent =
             lines[skip_idx].find_first_not_of(' ');
-        for (std::size_t li = skip_idx + 1; li < lines.size(); ++li) {
-            const std::size_t indent = lines[li].find_first_not_of(' ');
-            const std::string_view trimmed = trim_line_view(lines[li]);
-            if (indent < declaration_indent && trimmed.starts_with('}')) break;
-            if (text_contains_identifier_in_code(lines[li], name)) return true;
+        const auto found = appears_on.find(name);
+        if (found == appears_on.end()) return false;
+        const auto next = std::ranges::upper_bound(found->second, skip_idx);
+        if (next == found->second.end()) return false;
+        for (std::size_t li = skip_idx + 1; li <= *next; ++li) {
+            if (closing_indent[li] < declaration_indent) return false;
         }
-        return false;
+        return true;
     };
 
     for (int pass = 0; pass < 4; ++pass) {
         bool changed = false;
+        index_lines();
         std::vector<std::string> kept;
         kept.reserve(lines.size());
         for (std::size_t li = 0; li < lines.size(); ++li) {

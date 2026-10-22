@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #include <spelunk/common/types.hpp>
@@ -28,6 +29,8 @@ incomplete_c_export_reason(std::string_view text);
                                             std::string_view name);
 [[nodiscard]] bool text_declares_identifier(std::string_view text,
                                             std::string_view name);
+// Every name text_declares_identifier would accept in `text`, from one scan.
+[[nodiscard]] std::unordered_set<std::string> declared_identifiers(std::string_view text);
 // Replace code tokens only; preserve strings and comments verbatim.
 [[nodiscard]] std::string replace_identifier(std::string_view text,
                                              std::string_view old_name,

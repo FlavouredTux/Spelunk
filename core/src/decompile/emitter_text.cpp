@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -226,6 +227,40 @@ bool text_declares_identifier(std::string_view text,
         start = end + 1;
     }
     return false;
+}
+
+std::unordered_set<std::string> declared_identifiers(std::string_view text) {
+    // One pass of code_line_declares_identifier's rule over every token: an
+    // identifier after whitespace and a type, before `=`, `;`, `[` or the end.
+    std::unordered_set<std::string> declared;
+    const std::string code = code_only_text(text);
+    std::size_t start = 0;
+    while (start <= code.size()) {
+        std::size_t end = code.find('\n', start);
+        if (end == std::string::npos) end = code.size();
+        const std::string_view line = trim_line_view(std::string_view(code).substr(start, end - start));
+        if (!line.starts_with("return ") && !line.starts_with("goto ")) {
+            for (std::size_t pos = 1; pos < line.size(); ++pos) {
+                if (!c_ident_char(line[pos]) ||
+                    !std::isspace(static_cast<unsigned char>(line[pos - 1]))) continue;
+                std::size_t token_end = pos;
+                while (token_end < line.size() && c_ident_char(line[token_end])) ++token_end;
+                const std::string_view before = trim_line_view(line.substr(0, pos));
+                const std::string_view after = trim_line_view(line.substr(token_end));
+                if (!before.empty() &&
+                    (after.empty() || after.front() == '=' || after.front() == ';' ||
+                     after.front() == '[') &&
+                    before.find('(') == std::string_view::npos &&
+                    before.find("->") == std::string_view::npos) {
+                    declared.emplace(line.substr(pos, token_end - pos));
+                }
+                pos = token_end;
+            }
+        }
+        if (end == code.size()) break;
+        start = end + 1;
+    }
+    return declared;
 }
 
 std::string replace_identifier(std::string_view text,

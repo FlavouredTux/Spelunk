@@ -6,7 +6,6 @@
 #include <format>
 #include <map>
 #include <optional>
-#include <regex>
 #include <set>
 #include <string>
 #include <string_view>
@@ -26,6 +25,133 @@
 #include "emitter_tables.hpp"
 
 namespace spelunk::emit {
+
+namespace {
+
+// Hand scanners for the rendered-text patterns below. std::regex compiles
+// slowly and races on the locale cache when functions emit in parallel.
+bool word_char(char c) noexcept {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '_';
+}
+
+std::size_t skip_spaces(std::string_view text, std::size_t i) noexcept {
+    while (i < text.size() && std::isspace(static_cast<unsigned char>(text[i]))) ++i;
+    return i;
+}
+
+// `\b(ident)` at i: the identifier's end, or npos.
+std::size_t identifier_end(std::string_view text, std::size_t i) noexcept {
+    if (i >= text.size() || std::isdigit(static_cast<unsigned char>(text[i])) ||
+        !word_char(text[i]) || (i > 0 && word_char(text[i - 1]))) {
+        return std::string_view::npos;
+    }
+    while (i < text.size() && word_char(text[i])) ++i;
+    return i;
+}
+
+struct PointerDecl {
+    std::string_view type;
+    std::string_view variable;
+};
+
+// Every `\b(type)\s*\*\s*(ident)` in text order, non-overlapping, where
+// type is an identifier accepted by type_ok. With `assigned`, the
+// declaration must be followed by `\s*=`.
+template <typename TypeOk>
+std::vector<PointerDecl> pointer_declarations(std::string_view text, bool assigned,
+                                              TypeOk type_ok) {
+    std::vector<PointerDecl> out;
+    std::size_t i = 0;
+    while (i < text.size()) {
+        const std::size_t type_end = identifier_end(text, i);
+        if (type_end == std::string_view::npos) {
+            ++i;
+            continue;
+        }
+        if (!type_ok(text.substr(i, type_end - i))) {
+            i = type_end;
+            continue;
+        }
+        std::size_t j = skip_spaces(text, type_end);
+        std::size_t var_end = std::string_view::npos;
+        if (j < text.size() && text[j] == '*') {
+            j = skip_spaces(text, j + 1);
+            var_end = identifier_end(text, j);
+        }
+        std::size_t end = var_end;
+        if (var_end != std::string_view::npos && assigned) {
+            const std::size_t eq = skip_spaces(text, var_end);
+            end = eq < text.size() && text[eq] == '=' ? eq + 1 : std::string_view::npos;
+        }
+        if (end == std::string_view::npos) {
+            i = type_end;
+            continue;
+        }
+        out.push_back({text.substr(i, type_end - i), text.substr(j, var_end - j)});
+        i = end;
+    }
+    return out;
+}
+
+struct FieldUse {
+    std::string field;  // `kind_hex`
+    std::string kind;
+    i64 offset = 0;
+};
+
+// Every `\bvariable->((byte|half|...|data)_([0-9a-fA-F]+))` in text order.
+std::vector<FieldUse> fallback_field_uses(std::string_view text, std::string_view variable) {
+    static constexpr std::string_view kinds[] = {
+        "byte", "half", "word", "qword", "float", "double", "data"};
+    std::vector<FieldUse> out;
+    if (variable.empty()) return out;
+    for (std::size_t at = text.find(variable); at != std::string_view::npos;
+         at = text.find(variable, at + 1)) {
+        if (at > 0 && word_char(text[at - 1])) continue;
+        std::size_t i = at + variable.size();
+        if (text.substr(i, 2) != "->") continue;
+        i += 2;
+        for (const std::string_view kind : kinds) {
+            if (text.substr(i, kind.size()) != kind ||
+                i + kind.size() >= text.size() || text[i + kind.size()] != '_') {
+                continue;
+            }
+            const std::size_t hex = i + kind.size() + 1;
+            std::size_t hex_end = hex;
+            while (hex_end < text.size() &&
+                   std::isxdigit(static_cast<unsigned char>(text[hex_end]))) {
+                ++hex_end;
+            }
+            if (hex_end == hex) break;
+            i64 offset = 0;
+            const auto parsed = std::from_chars(
+                text.data() + hex, text.data() + hex_end, offset, 16);
+            if (parsed.ec == std::errc{}) {
+                out.push_back({std::string(text.substr(i, hex_end - i)),
+                               std::string(kind), offset});
+            }
+            at = hex_end - 1;
+            break;
+        }
+    }
+    return out;
+}
+
+bool is_ppc_fallback_type(std::string_view type) noexcept {
+    for (const std::string_view prefix : {"PpcGlobalState", "PpcObject", "PpcState"}) {
+        if (!type.starts_with(prefix)) continue;
+        const std::string_view digits = type.substr(prefix.size());
+        if (std::ranges::all_of(digits, [](char c) {
+                return std::isdigit(static_cast<unsigned char>(c));
+            })) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
 
 std::string Emitter::normalize_c_type_alias(std::string_view t) {
     auto map_base = [](std::string_view base) -> std::string_view {
@@ -583,11 +709,10 @@ Emitter::synthetic_struct_declarations(std::string_view rendered_function) const
     }
     const std::string rendered(rendered_function);
     std::map<std::string, std::string> pointer_local_types;
-    const std::regex pointer_local(
-        R"(\b([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*)\s*=)");
-    for (std::sregex_iterator it(rendered.begin(), rendered.end(), pointer_local), end;
-         it != end; ++it) {
-        pointer_local_types.try_emplace((*it)[2].str(), (*it)[1].str() + "*");
+    for (const auto& decl : pointer_declarations(
+             rendered, true, [](std::string_view) { return true; })) {
+        pointer_local_types.try_emplace(std::string(decl.variable),
+                                        std::string(decl.type) + "*");
     }
     std::set<std::string> used_names;
     for (const auto& [name, members] : struct_type_members) {
@@ -691,32 +816,18 @@ Emitter::synthetic_struct_declarations(std::string_view rendered_function) const
     // indexed table walk) without contributing to struct_type_members.
     // Recover the visible fallback fields from the rendered text so the
     // resulting pseudo-C never references an undeclared PpcState family.
-    const std::regex pointer_decl(
-        R"(\b(Ppc(?:GlobalState|Object|State)[0-9]*)\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))");
     std::map<std::string, std::map<i64, std::pair<std::string, std::string>>>
         fallback_members;
     const auto collect_fields = [&](const std::string& type_name,
-                                    const std::string& variable) {
+                                    std::string_view variable) {
         if (used_names.contains(type_name)) return;
-        const std::regex field_use(std::format(
-            R"(\b{}->((byte|half|word|qword|float|double|data)_([0-9a-fA-F]+)))",
-            variable));
-        for (std::sregex_iterator field_it(
-                 rendered.begin(), rendered.end(), field_use), end;
-             field_it != end; ++field_it) {
-            i64 offset = 0;
-            const std::string raw_offset = (*field_it)[3].str();
-            const auto parsed = std::from_chars(
-                raw_offset.data(), raw_offset.data() + raw_offset.size(),
-                offset, 16);
-            if (parsed.ec != std::errc{}) continue;
+        for (auto& use : fallback_field_uses(rendered, variable)) {
             fallback_members[type_name].try_emplace(
-                offset, (*field_it)[2].str(), (*field_it)[1].str());
+                use.offset, std::move(use.kind), std::move(use.field));
         }
     };
-    for (std::sregex_iterator it(rendered.begin(), rendered.end(), pointer_decl), end;
-         it != end; ++it) {
-        collect_fields((*it)[1].str(), (*it)[2].str());
+    for (const auto& decl : pointer_declarations(rendered, false, is_ppc_fallback_type)) {
+        collect_fields(std::string(decl.type), decl.variable);
     }
     for (const auto& [variable, local] : merge_locals) {
         std::string type_name = c_type_name_for(local.type_value);
@@ -813,26 +924,11 @@ Emitter::imported_record_declarations(std::string_view rendered_function) const 
     std::map<std::string, std::map<i64, std::pair<std::string, std::string>>>
         fallback_fields;
     for (const std::string& name : used) {
-        const std::regex pointer_decl(std::format(
-            R"(\b{}\s*\*\s*([A-Za-z_][A-Za-z0-9_]*))", name));
-        for (std::sregex_iterator it(
-                 rendered.begin(), rendered.end(), pointer_decl), end;
-             it != end; ++it) {
-            const std::string variable = (*it)[1].str();
-            const std::regex field_use(std::format(
-                R"(\b{}->((byte|half|word|qword|float|double|data)_([0-9a-fA-F]+)))",
-                variable));
-            for (std::sregex_iterator field_it(
-                     rendered.begin(), rendered.end(), field_use);
-                 field_it != end; ++field_it) {
-                i64 offset = 0;
-                const std::string raw_offset = (*field_it)[3].str();
-                const auto parsed = std::from_chars(
-                    raw_offset.data(), raw_offset.data() + raw_offset.size(),
-                    offset, 16);
-                if (parsed.ec != std::errc{}) continue;
+        for (const auto& decl : pointer_declarations(
+                 rendered, false, [&](std::string_view type) { return type == name; })) {
+            for (auto& use : fallback_field_uses(rendered, decl.variable)) {
                 fallback_fields[name].try_emplace(
-                    offset, (*field_it)[2].str(), (*field_it)[1].str());
+                    use.offset, std::move(use.kind), std::move(use.field));
             }
         }
     }
@@ -840,20 +936,9 @@ Emitter::imported_record_declarations(std::string_view rendered_function) const 
         const std::string name = imported_record_base(type);
         if (!used.contains(name) ||
             !annotations->imported_records.contains(name)) continue;
-        const std::regex field_use(std::format(
-            R"(\b{}->((byte|half|word|qword|float|double|data)_([0-9a-fA-F]+)))",
-            variable));
-        for (std::sregex_iterator field_it(
-                 rendered.begin(), rendered.end(), field_use), end;
-             field_it != end; ++field_it) {
-            i64 offset = 0;
-            const std::string raw_offset = (*field_it)[3].str();
-            const auto parsed = std::from_chars(
-                raw_offset.data(), raw_offset.data() + raw_offset.size(),
-                offset, 16);
-            if (parsed.ec != std::errc{}) continue;
+        for (auto& use : fallback_field_uses(rendered, variable)) {
             fallback_fields[name].try_emplace(
-                offset, (*field_it)[2].str(), (*field_it)[1].str());
+                use.offset, std::move(use.kind), std::move(use.field));
         }
     }
 

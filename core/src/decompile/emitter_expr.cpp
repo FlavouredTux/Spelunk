@@ -629,11 +629,20 @@ std::string Emitter::format_store(const IrInst& inst) const {
             } else if (auto interior = stack_storage_access(*off, val.type);
                        !interior.empty()) {
                 lhs = std::move(interior);
-            } else if (auto it = frame_layout.slots.find(*off);
-                it != frame_layout.slots.end() && !it->second.name.empty()) {
-                lhs = it->second.name;
             } else {
-                lhs = stack_name(*off);
+                // Same precedence as format_mem: a real frame-layout name,
+                // then the incoming parameter the slot holds, then the
+                // synthetic slot name.
+                auto it = frame_layout.slots.find(*off);
+                const bool has_name =
+                    it != frame_layout.slots.end() && !it->second.name.empty();
+                if (has_name && it->second.name != stack_name(*off)) {
+                    lhs = it->second.name;
+                } else if (auto arg = incoming_stack_arg_name(addr, *off)) {
+                    lhs = *arg;
+                } else {
+                    lhs = has_name ? it->second.name : stack_name(*off);
+                }
             }
         }
     }
@@ -666,6 +675,8 @@ std::string Emitter::format_store(const IrInst& inst) const {
     }
     const std::string rhs = options.c_source && !is_float_type(val.type) && type_bits(val.type) <= 64
         ? std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val)) : expr(val);
+    // A register reloaded from its stack home and spilled straight back.
+    if (lhs == rhs && inst.segment == Reg::None && stack_offset(addr)) return "";
     return std::format("{} = {};", lhs, rhs);
 }
 

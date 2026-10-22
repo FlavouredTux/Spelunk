@@ -1,4 +1,5 @@
 // Inlining decisions, materialization and immediate formatting.
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <cstddef>
@@ -448,7 +449,23 @@ Emitter::entry_stack_offset(const IrValue& v, int depth) const {
         auto base = entry_stack_offset(d->srcs[1], depth + 1);
         if (base) return *base + d->srcs[0].imm;
     }
+    if (is_stack_realignment(*d)) {
+        auto base = entry_stack_offset(d->srcs[0], depth + 1);
+        if (base) return *base & d->srcs[1].imm;
+    }
     return std::nullopt;
+}
+
+// `and esp, -N` realigning the frame. The entry alignment is unknown, so
+// offsets through it assume an aligned entry pointer: consistent for every
+// access made through the realigned pointer, which is all of them.
+bool Emitter::is_stack_realignment(const IrInst& d) {
+    if (d.op != IrOp::And || d.src_count < 2 ||
+        d.srcs[1].kind != IrValueKind::Imm) {
+        return false;
+    }
+    const i64 mask = d.srcs[1].imm;
+    return mask < 0 && mask >= -4096 && std::has_single_bit(static_cast<u64>(-mask));
 }
 
 // A stack pointer merged from paths that agree on its offset, as after a
@@ -524,6 +541,12 @@ std::optional<i64> Emitter::stack_offset(const IrValue& v, int depth) const {
             if (base && d->srcs[1].kind == IrValueKind::Imm) {
                 return *base - d->srcs[1].imm;
             }
+            return std::nullopt;
+        }
+        case IrOp::And: {
+            if (!is_stack_realignment(*d)) return std::nullopt;
+            auto base = stack_offset(d->srcs[0], depth + 1);
+            if (base) return *base & d->srcs[1].imm;
             return std::nullopt;
         }
         default:

@@ -219,13 +219,13 @@ Emitter::args_for_layout(const std::vector<InferredArgument>& layout,
     for (const auto& arg : layout) {
         if (arg.stack_offset) {
             if (is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64) {
-                const i64 word = is_x86_32_abi(abi) ? 4 : 8;
                 const i64 first = is_x86_32_abi(abi) ? 4 : (abi == Abi::SysVAmd64 ? 8 : 40);
-                const i64 slot = (*arg.stack_offset - first) / word;
+                const auto at = std::ranges::find(pack.stack_offsets,
+                                                  *arg.stack_offset - first);
                 IrValue value;
-                if (*arg.stack_offset >= first && slot >= 0 &&
-                    static_cast<std::size_t>(slot) < pack.stack.size()) {
-                    value = pack.stack[static_cast<std::size_t>(slot)];
+                if (at != pack.stack_offsets.end()) {
+                    value = pack.stack[static_cast<std::size_t>(
+                        at - pack.stack_offsets.begin())];
                 } else if (abi == Abi::Win64 && *arg.stack_offset >= 40 &&
                            static_cast<std::size_t>((*arg.stack_offset - 8) / 8) < pack.ints.size()) {
                     value = pack.ints[static_cast<std::size_t>((*arg.stack_offset - 8) / 8)];
@@ -1035,18 +1035,28 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
                 std::erase_if(recent_stack_stores, [&](const auto& stored) {
                     return stored.first < *offset + width && *offset < stored.first + stored.second.first;
                 });
-                if (width == 4 || width == 8) recent_stack_stores[*offset] = {width, inst.srcs[1]};
+                // A narrow argument may store only its low bytes into the
+                // slot (`mov word ptr [esp], ax`); it still owns the word.
+                if (width == 1 || width == 2 || width == 4 || width == 8)
+                    recent_stack_stores[*offset] = {width, inst.srcs[1]};
             }
         }
         if (inst.op == IrOp::Intrinsic && inst.name == "call.stack_pointer") {
             pack.stack.clear();
+            pack.stack_offsets.clear();
             if (inst.src_count && (is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64)) {
                 if (auto offset = entry_stack_offset(inst.srcs[0])) {
                     if (abi == Abi::Win64) *offset += 32;
+                    // Walk the stores by width: an 8-byte argument on x86-32
+                    // covers two parameter words.
+                    const i64 word = is_x86_32_abi(abi) ? 4 : 8;
+                    i64 cursor = 0;
                     for (std::size_t i = 0; i < kMaxAbiArgs - int_arg_regs(abi).size(); ++i) {
-                        auto found = recent_stack_stores.find(*offset + static_cast<i64>(i) * (is_x86_32_abi(abi) ? 4 : 8));
+                        auto found = recent_stack_stores.find(*offset + cursor);
                         if (found == recent_stack_stores.end()) break;
                         pack.stack.push_back(found->second.second);
+                        pack.stack_offsets.push_back(cursor);
+                        cursor += std::max(found->second.first, word);
                     }
                 }
             }

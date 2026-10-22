@@ -984,6 +984,7 @@ struct Emitter {
     entry_stack_offset(const IrValue& v, int depth = 0) const;
     [[nodiscard]] std::optional<i64>
     entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int depth) const;
+    [[nodiscard]] static bool is_stack_realignment(const IrInst& d);
     // Stack-pointer phis being resolved, with the offset each is assumed
     // to hold while its back edges are checked.
     mutable std::map<SsaKey, std::optional<i64>> stack_phi_assumptions;
@@ -1326,8 +1327,12 @@ struct Emitter {
         std::vector<IrValue> ints;   // call.args.N packs, in order
         std::vector<IrValue> fps;    // call.fp_args.N packs
         std::vector<IrValue> stack;  // contiguous, explicitly stored x64 arguments
+        std::vector<i64> stack_offsets;  // byte offset of each, from the first
         bool have_pending = false;
-        void clear() { ints.clear(); fps.clear(); stack.clear(); have_pending = false; }
+        void clear() {
+            ints.clear(); fps.clear(); stack.clear(); stack_offsets.clear();
+            have_pending = false;
+        }
     };
     struct PpcOutgoingStackArgs {
         // call inst index -> parameter-area offset -> stored value

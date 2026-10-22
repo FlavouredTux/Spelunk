@@ -103,6 +103,45 @@ void filter_shadowed_entries(std::vector<DiscoveredFunction>& fns,
     fns = std::move(out);
 }
 
+// A start that only a prologue pattern vouches for, inside code the
+// preceding function falls through into, is that function's body - MSVC
+// pushes arguments (`push esi; push edi`) mid-function in exactly the shapes
+// a frameless prologue has. Decode linearly from the preceding entry; a
+// return, unconditional jump or padding ends it, and a candidate past that
+// point keeps its place.
+void filter_fallthrough_prologue_starts(std::vector<DiscoveredFunction>& fns,
+                                        const Binary& b,
+                                        const std::unordered_set<addr_t>& prologue_only) {
+    if (fns.size() < 2 || prologue_only.empty()) return;
+    std::sort(fns.begin(), fns.end(),
+              [](const auto& x, const auto& y) { return x.addr < y.addr; });
+    auto dec_r = make_decoder(b);
+    if (!dec_r) return;
+    const Decoder& dec = **dec_r;
+    std::vector<DiscoveredFunction> out;
+    out.reserve(fns.size());
+    for (auto& fn : fns) {
+        bool interior = false;
+        if (!out.empty() && prologue_only.contains(fn.addr)) {
+            addr_t pc = out.back().addr;
+            while (pc < fn.addr) {
+                auto bytes = b.bytes_at(pc);
+                if (bytes.empty()) break;
+                auto instruction = dec.decode(bytes, pc);
+                if (!instruction || instruction->length == 0) break;
+                if (is_return_like(instruction->mnemonic) ||
+                    is_unconditional_jmp(instruction->mnemonic) ||
+                    instruction->mnemonic == Mnemonic::Int3 ||
+                    instruction->mnemonic == Mnemonic::Nop) break;
+                pc += instruction->length;
+                if (pc >= fn.addr) interior = true;
+            }
+        }
+        if (!interior) out.push_back(std::move(fn));
+    }
+    fns = std::move(out);
+}
+
 void filter_entries_inside_unwind_extents(std::vector<DiscoveredFunction>& fns,
                                           std::vector<FdeExtent> extents) {
     if (fns.empty() || extents.empty()) return;
@@ -876,8 +915,13 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     }
 
     const std::size_t before_prologues = out.size();
+    std::unordered_set<addr_t> prologue_only;
     if (unwind_extents.size() < kDenseFdeThreshold) {
-        for (addr_t a : discover_from_prologues(b, lo, hi)) add_candidate(a, "sub");
+        for (addr_t a : discover_from_prologues(b, lo, hi)) {
+            const std::size_t before = out.size();
+            add_candidate(a, "sub");
+            if (out.size() != before && b.arch() == Arch::X86) prologue_only.insert(a);
+        }
     }
     const std::size_t prologue_added = out.size() - before_prologues;
     if (b.format() == Format::Dol || b.arch() == Arch::Ppc32 || b.arch() == Arch::Ppc64) {
@@ -909,6 +953,7 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     if (mode == EnumerateMode::Cheap ||
         dense_authoritative_starts ||
         (mode == EnumerateMode::Auto && binary_looks_packed(b))) {
+        filter_fallthrough_prologue_starts(out, b, prologue_only);
         filter_entries_inside_unwind_extents(out, unwind_extents);
         filter_shadowed_entries(out, b);
         filter_entries_inside_sized_symbols(out);
@@ -920,9 +965,11 @@ enumerate_functions(const Binary& b, EnumerateMode mode, addr_t lo, addr_t hi) {
     // Sizes for these are filled in later by fill_unknown_sizes() using the
     // gap to the next discovered function (or section boundary).
     for (const auto& e : compute_call_graph(b)) {
+        prologue_only.erase(e.callee);
         add_candidate(e.callee, "sub");
     }
 
+    filter_fallthrough_prologue_starts(out, b, prologue_only);
     filter_entries_inside_unwind_extents(out, unwind_extents);
     filter_shadowed_entries(out, b);
     filter_entries_inside_sized_symbols(out);

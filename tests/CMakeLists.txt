@@ -464,6 +464,8 @@ spelunk_use_prebuilt_fixture(win32)
 # x87 arithmetic and compares, an 8-byte stack argument through a realigned
 # frame, and stdcall imports. Pinned like win32; win32_abi.c has the line.
 spelunk_use_prebuilt_fixture(win32_abi)
+# Stripped, MSVC-laid-out code for x86 function discovery; build line in the .c.
+spelunk_use_prebuilt_fixture(win32_discovery)
 # Multi-resolver: two functions populating disjoint slot ranges of one
 # fnptr table - the iterative detector has to find both, the merged
 # output has to attribute every slot to the right resolver.
@@ -816,6 +818,16 @@ spelunk_golden_test(
 # read as plain double arithmetic. The rest pin stack arguments through
 # realigned frames and register-held imports, return types from st0, the
 # seed of a guarded rotated loop, and MSVC's SEH frame and inline memcpy.
+# A stripped binary has only discovery to find its functions: padding after
+# a return marks a start even without a prologue shape, while argument
+# pushes mid-body and nop-aligned loop heads do not.
+spelunk_golden_test(
+    NAME    win32_discovery_functions
+    FIXTURE win32_discovery
+    ARGS    "--no-cache|--functions"
+    GOLDEN  win32_discovery.functions.txt
+)
+
 foreach(_fn scale magnitude pick truncate forward after_calls merged_calls nothing walk
              guarded naps copy)
     spelunk_golden_test(

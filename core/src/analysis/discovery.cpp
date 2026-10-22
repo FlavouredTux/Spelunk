@@ -111,6 +111,87 @@ namespace {
     return false;
 }
 
+// 32-bit x86. The x64 shapes above read `push reg; dec eax` here, which
+// MSVC emits all over function bodies while pushing arguments.
+[[nodiscard]] bool is_x86_push_reg(std::uint8_t b) noexcept {
+    return b == 0x53 || b == 0x55 || b == 0x56 || b == 0x57;
+}
+
+// Shapes that only begin functions: frame setup, MSVC's hotpatch pad, and
+// the SEH registration `push -1; push scope; push handler; mov eax, fs:[0]`.
+[[nodiscard]] bool looks_like_strong_x86_32_prologue(std::span<const std::byte> bytes) noexcept {
+    if (bytes.size() < 3) return false;
+    const auto at = [&](std::size_t i) { return static_cast<std::uint8_t>(bytes[i]); };
+    // 55 8B EC / 55 89 E5   push ebp; mov ebp, esp
+    if (at(0) == 0x55 && ((at(1) == 0x8B && at(2) == 0xEC) || (at(1) == 0x89 && at(2) == 0xE5)))
+        return true;
+    // 8B FF 55 8B EC         mov edi, edi; push ebp; mov ebp, esp
+    if (bytes.size() >= 5 && at(0) == 0x8B && at(1) == 0xFF && at(2) == 0x55 &&
+        at(3) == 0x8B && at(4) == 0xEC) return true;
+    // 6A FF 68 imm32 68 imm32 64 A1 00 00 00 00
+    return bytes.size() >= 14 && at(0) == 0x6A && at(1) == 0xFF && at(2) == 0x68 &&
+           at(7) == 0x68 && at(12) == 0x64 && at(13) == 0xA1;
+}
+
+// Shapes that also occur mid-body: a run of register pushes, or `sub esp`.
+// They count only where a function could begin.
+[[nodiscard]] bool looks_like_weak_x86_32_prologue(std::span<const std::byte> bytes) noexcept {
+    if (bytes.size() < 3) return false;
+    const auto b0 = static_cast<std::uint8_t>(bytes[0]);
+    const auto b1 = static_cast<std::uint8_t>(bytes[1]);
+    const auto b2 = static_cast<std::uint8_t>(bytes[2]);
+    if (b0 == 0x83 && b1 == 0xEC) return true;                    // sub esp, imm8
+    if (b0 == 0x81 && b1 == 0xEC) return true;                    // sub esp, imm32
+    if (is_x86_push_reg(b0) && is_x86_push_reg(b1)) return true;  // push; push
+    // push reg; mov reg, [esp+disp8] - a frameless function taking an argument
+    return is_x86_push_reg(b0) && b1 == 0x8B && (b2 & 0xC7) == 0x44;
+}
+
+// Where a function can begin: after padding (int3 / nop), a return, or an
+// unconditional jump.
+[[nodiscard]] bool follows_x86_32_boundary(std::span<const std::byte> data,
+                                           std::size_t off) noexcept {
+    if (off == 0) return true;
+    const auto prev = static_cast<std::uint8_t>(data[off - 1]);
+    if (prev == 0xCC || prev == 0x90 || prev == 0xC3) return true;
+    if (off >= 3 && static_cast<std::uint8_t>(data[off - 3]) == 0xC2) return true;   // ret imm16
+    if (off >= 5 && static_cast<std::uint8_t>(data[off - 5]) == 0xE9) return true;   // jmp rel32
+    if (off >= 2 && static_cast<std::uint8_t>(data[off - 2]) == 0xEB) return true;   // jmp rel8
+    if (off >= 6 && static_cast<std::uint8_t>(data[off - 6]) == 0xFF &&
+        static_cast<std::uint8_t>(data[off - 5]) == 0x25) return true;              // jmp [abs]
+    return false;
+}
+
+// The next function after a return and its alignment padding. Optimized
+// MSVC code often starts with no prologue shape at all (`mov eax, [g]`),
+// but sits on a 16-byte boundary after `ret` and a nop or int3 run. A nop
+// run after a jump is not enough: gcc aligns loop heads that way.
+[[nodiscard]] bool starts_after_padding(std::span<const std::byte> data,
+                                        std::size_t off, addr_t addr) noexcept {
+    if ((addr & 0xF) != 0 || off == 0) return false;
+    const auto at = [&](std::size_t i) { return static_cast<std::uint8_t>(data[i]); };
+    const std::uint8_t pad = at(off - 1);
+    if ((pad != 0x90 && pad != 0xCC) || at(off) == 0x90 || at(off) == 0xCC) return false;
+    std::size_t start = off - 1;
+    while (start > 0 && at(start - 1) == pad) --start;
+    if (start >= 1 && at(start - 1) == 0xC3) return true;
+    if (start >= 3 && at(start - 3) == 0xC2) return true;
+    if (pad != 0xCC) return false;
+    return (start >= 5 && at(start - 5) == 0xE9) || (start >= 2 && at(start - 2) == 0xEB);
+}
+
+[[nodiscard]] bool looks_like_x86_32_prologue(std::span<const std::byte> data,
+                                              std::size_t off, addr_t addr) noexcept {
+    if (starts_after_padding(data, off, addr)) return true;
+    const auto bytes = data.subspan(off);
+    if (looks_like_strong_x86_32_prologue(bytes)) {
+        // The frame setup after a hotpatch pad belongs to that pad's start.
+        return !(off >= 2 && static_cast<std::uint8_t>(data[off - 2]) == 0x8B &&
+                 static_cast<std::uint8_t>(data[off - 1]) == 0xFF);
+    }
+    return looks_like_weak_x86_32_prologue(bytes) && follows_x86_32_boundary(data, off);
+}
+
 [[nodiscard]] bool looks_like_prologue(std::span<const std::byte> bytes) noexcept {
     if (is_x86_endbr(bytes)) {
         return looks_like_plain_x64_prologue(bytes.subspan(4));
@@ -278,13 +359,19 @@ namespace {
 [[nodiscard]] static std::vector<addr_t>
 sweep_section_chunk(std::span<const std::byte> data, addr_t base,
                     std::size_t off_begin, std::size_t off_end,
-                    const X64Decoder& dec) {
+                    const X64Decoder& dec, bool mode32) {
     std::vector<addr_t> hits;
     if (off_end > data.size()) off_end = data.size();
     if (off_end < 8) return hits;
     off_end -= 7;     // need 8 bytes available for a candidate
     for (std::size_t off = off_begin; off < off_end; ++off) {
         const auto cand = data.subspan(off);
+        if (mode32) {
+            if (!looks_like_x86_32_prologue(data, off, base + off)) continue;
+            if (!validates_as_function_start(dec, cand, base + off)) continue;
+            hits.push_back(base + off);
+            continue;
+        }
         if (!looks_like_prologue(cand)) continue;
         // `sub rsp, imm` is a valid frameless prologue, but it is also
         // the stack-allocation instruction immediately after the common
@@ -391,7 +478,8 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
         if (scope_size < kSerialThreshold || target_workers <= 1) {
             X64Decoder dec(b.arch() != Arch::X86);
             per_section_hits.push_back(
-                sweep_section_chunk(data, base, scope_off_lo, scope_off_hi, dec));
+                sweep_section_chunk(data, base, scope_off_lo, scope_off_hi, dec,
+                                    b.arch() == Arch::X86));
             continue;
         }
 
@@ -416,7 +504,8 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
                 : std::min(scope_off_hi, raw_end + kOverlap);
             threads.emplace_back([&, i, begin, end]() {
                 X64Decoder dec(b.arch() != Arch::X86);
-                chunk_hits[i] = sweep_section_chunk(data, base, begin, end, dec);
+                chunk_hits[i] = sweep_section_chunk(data, base, begin, end, dec,
+                                                    b.arch() == Arch::X86);
             });
         }
         for (auto& t : threads) t.join();

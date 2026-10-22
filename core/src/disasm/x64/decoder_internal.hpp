@@ -18,6 +18,9 @@ enum class OpSpec : u8 {
     None,
     Eb, Ev, Ew, Ed, Edq, M,
     Gb, Gv, Gw,
+    // GPR from ModR/M.reg, 32-bit unless REX.W: the 66 prefix sizes only
+    // the other operand (CRC32's destination).
+    Gdq,
     Ib, Iw, Iz, Iv,
     Ibsext,
     Jb, Jz,
@@ -38,6 +41,10 @@ enum class OpSpec : u8 {
     // Emitted for `movss`/`addss`/... (32-bit scalar single) and
     // `movsd`/`addsd`/... (64-bit scalar double).
     Wss, Wsd,
+    // xmm register or 2-byte memory (pmovsxbq / pmovzxbq / wq sources).
+    Ww,
+    // 32-bit GPR from r/m, or byte / word memory (pextrb, pinsrb, pextrw).
+    RdMb, RdMw,
 };
 
 struct OpcodeEntry {
@@ -145,6 +152,11 @@ extern const std::array<OpcodeEntry, 256> kSecondary;
 extern const std::array<OpcodeEntry, 256> kSecondary_66;
 extern const std::array<OpcodeEntry, 256> kSecondary_F3;
 extern const std::array<OpcodeEntry, 256> kSecondary_F2;
+// Legacy three-byte maps 0F 38 / 0F 3A (SSSE3, SSE4.x, AES-NI, CRC32).
+extern const std::array<OpcodeEntry, 256> kMap38;
+extern const std::array<OpcodeEntry, 256> kMap38_66;
+extern const std::array<OpcodeEntry, 256> kMap38_F2;
+extern const std::array<OpcodeEntry, 256> kMap3A_66;
 extern const std::array<OpcodeEntry, 256> kVexMap2;
 extern const std::array<OpcodeEntry, 256> kVexMap2_66;
 extern const std::array<OpcodeEntry, 256> kVexMap2_F3;

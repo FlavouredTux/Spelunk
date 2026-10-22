@@ -565,6 +565,34 @@ void lift_pextrw(LiftCtx& ctx);
 
 void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing);
 
+// `op xmm, xmm/m [, imm8]` whose result depends only on the source:
+// conversions, sqrt, pabs, pmovsx/zx, round. A narrow memory source (the
+// m64 of cvtdq2pd, the m32 of pmovsxbd) loads only its own bytes.
+void lift_simd_unop(LiftCtx& ctx, std::string_view name);
+
+// Vector source, scalar GPR or memory destination: movmsk*, pextr*,
+// extractps.
+void lift_simd_to_gpr(LiftCtx& ctx, std::string_view name, IrType result);
+
+// `pinsr* xmm, r/m, imm8`: scalar lane source at `lane` width.
+void lift_simd_insert(LiftCtx& ctx, std::string_view name, IrType lane);
+
+// cmpps / cmppd / cmpsd: the imm8 predicate picks the SSE intrinsic.
+void lift_simd_cmp_predicate(LiftCtx& ctx, std::string_view suffix);
+
+// pblendvb / blendvps / blendvpd with the implicit xmm0 selector.
+void lift_simd_blendv(LiftCtx& ctx, std::string_view name);
+
+void lift_ptest(LiftCtx& ctx);
+void lift_crc32(LiftCtx& ctx);
+void lift_movbe(LiftCtx& ctx);
+void lift_mxcsr(LiftCtx& ctx, bool store);
+void lift_clflush(LiftCtx& ctx);
+// movlps / movhps / movlpd / movhpd (loads and stores of one 64-bit half)
+// and the register forms movhlps / movlhps.
+void lift_half_move(LiftCtx& ctx);
+void lift_bit_count(LiftCtx& ctx, bool leading);
+
 void lift_gpr_scalar_to_xmm(LiftCtx& ctx);
 
 void lift_gpr_scalar_from_xmm(LiftCtx& ctx);

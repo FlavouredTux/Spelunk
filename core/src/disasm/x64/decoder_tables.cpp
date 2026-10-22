@@ -164,6 +164,17 @@ constexpr std::array<OpcodeEntry, 256> build_primary() noexcept {
 
 constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     std::array<OpcodeEntry, 256> t{};
+    t[0x0d] = op(Mnemonic::Prefetch, OpSpec::M, OpSpec::None, OpSpec::None, true);
+    t[0x14] = op(Mnemonic::Unpcklps, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x15] = op(Mnemonic::Unpckhps, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x18] = op(Mnemonic::Prefetch, OpSpec::M, OpSpec::None, OpSpec::None, true);
+    t[0x2b] = op(Mnemonic::Movntps, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
+    t[0x50] = op(Mnemonic::Movmskps, OpSpec::Gv, OpSpec::Wx, OpSpec::None, true);
+    t[0x51] = op(Mnemonic::Sqrtps, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5a] = op(Mnemonic::Cvtps2pd, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x5b] = op(Mnemonic::Cvtdq2ps, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xc2] = op(Mnemonic::Cmpps, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0xc3] = op(Mnemonic::Movnti, OpSpec::M, OpSpec::Gv, OpSpec::None, true);
     t[0x05] = op(Mnemonic::Syscall);
     t[0x0B] = op(Mnemonic::Ud2);
     t[0x1F] = op(Mnemonic::Nop, OpSpec::Ev, OpSpec::None, OpSpec::None, true);
@@ -181,8 +192,12 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
     // SSE1: packed-float moves (no mandatory prefix).
     t[0x10] = op(Mnemonic::Movups,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x11] = op(Mnemonic::MovupsStore, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
-    t[0x12] = op(Mnemonic::Movlps,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
-    t[0x16] = op(Mnemonic::Movhps,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    // Half-register moves: the memory forms move 64 bits, the register
+    // forms of 12/16 are movhlps / movlhps.
+    t[0x12] = op(Mnemonic::Movlps,      OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x13] = op(Mnemonic::MovlpsStore, OpSpec::Wsd, OpSpec::Vx, OpSpec::None, true);
+    t[0x16] = op(Mnemonic::Movhps,      OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x17] = op(Mnemonic::MovhpsStore, OpSpec::Wsd, OpSpec::Vx, OpSpec::None, true);
     t[0x28] = op(Mnemonic::Movaps,      OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x29] = op(Mnemonic::MovapsStore, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
     t[0x2E] = op(Mnemonic::Ucomiss,     OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
@@ -285,6 +300,25 @@ constexpr std::array<OpcodeEntry, 256> build_secondary() noexcept {
 
 constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
     std::array<OpcodeEntry, 256> t{};
+    // movlpd / movhpd: the same 64-bit half moves as movlps / movhps.
+    t[0x12] = op(Mnemonic::Movlps,      OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x13] = op(Mnemonic::MovlpsStore, OpSpec::Wsd, OpSpec::Vx, OpSpec::None, true);
+    t[0x16] = op(Mnemonic::Movhps,      OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x17] = op(Mnemonic::MovhpsStore, OpSpec::Wsd, OpSpec::Vx, OpSpec::None, true);
+    t[0x14] = op(Mnemonic::Unpcklpd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x15] = op(Mnemonic::Unpckhpd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x2b] = op(Mnemonic::Movntpd, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
+    t[0x50] = op(Mnemonic::Movmskpd, OpSpec::Gv, OpSpec::Wx, OpSpec::None, true);
+    t[0x51] = op(Mnemonic::Sqrtpd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5a] = op(Mnemonic::Cvtpd2ps, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x5b] = op(Mnemonic::Cvtps2dq, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x63] = op(Mnemonic::Packsswb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x67] = op(Mnemonic::Packuswb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x6b] = op(Mnemonic::Packssdw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xc2] = op(Mnemonic::Cmppd, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0xe6] = op(Mnemonic::Cvttpd2dq, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xe7] = op(Mnemonic::Movntdq, OpSpec::Wx, OpSpec::Vx, OpSpec::None, true);
+    t[0xf6] = op(Mnemonic::Psadbw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x2E] = op(Mnemonic::Ucomisd,     OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
     t[0x2F] = op(Mnemonic::Comisd,      OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
     // Packed-double logical + arithmetic, mirroring the packed-single
@@ -381,6 +415,8 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_66() noexcept {
 
 constexpr std::array<OpcodeEntry, 256> build_secondary_f3() noexcept {
     std::array<OpcodeEntry, 256> t{};
+    t[0x5b] = op(Mnemonic::Cvttps2dq, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xe6] = op(Mnemonic::Cvtdq2pd, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
     // Scalar single-precision.
     t[0x10] = op(Mnemonic::MovssLoad,   OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x11] = op(Mnemonic::MovssStore,  OpSpec::Wss, OpSpec::Vx, OpSpec::None, true);
@@ -404,12 +440,19 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f3() noexcept {
     // POPCNT is a mandatory-F3 scalar integer opcode, not SSE. It still
     // routes through this table because F3 0F selects it.
     t[0xB8] = op(Mnemonic::Popcnt,      OpSpec::Gv, OpSpec::Ev, OpSpec::None, true);
+    // LZCNT / TZCNT (ABM / BMI1). On CPUs without them they execute as
+    // bsr / bsf, but the encodings mean lzcnt / tzcnt, which differ: lzcnt
+    // counts from the top, and both return the operand width for zero.
+    t[0xBC] = op(Mnemonic::Tzcnt,       OpSpec::Gv, OpSpec::Ev, OpSpec::None, true);
+    t[0xBD] = op(Mnemonic::Lzcnt,       OpSpec::Gv, OpSpec::Ev, OpSpec::None, true);
     return t;
 }
 
 // 0xF2 mandatory prefix: scalar double-precision.
 constexpr std::array<OpcodeEntry, 256> build_secondary_f2() noexcept {
     std::array<OpcodeEntry, 256> t{};
+    t[0xc2] = op(Mnemonic::CmpsdXmm, OpSpec::Vx, OpSpec::Wsd, OpSpec::Ib, true);
+    t[0xe6] = op(Mnemonic::Cvtpd2dq, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
     t[0x10] = op(Mnemonic::MovsdXmm,      OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x11] = op(Mnemonic::MovsdXmmStore, OpSpec::Wsd, OpSpec::Vx,  OpSpec::None, true);
     t[0x2A] = op(Mnemonic::Cvtsi2sd,      OpSpec::Vx,  OpSpec::Ev,  OpSpec::None, true);
@@ -423,6 +466,105 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f2() noexcept {
     t[0x5E] = op(Mnemonic::Divsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x5F] = op(Mnemonic::Maxsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x70] = op(Mnemonic::Pshuflw,       OpSpec::Vx,  OpSpec::Wx,  OpSpec::Ib,   true);
+    return t;
+}
+
+// Legacy 0F 38 without a mandatory prefix: MOVBE (load and store forms).
+constexpr std::array<OpcodeEntry, 256> build_map38_none() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0xf0] = op(Mnemonic::Movbe, OpSpec::Gv, OpSpec::M, OpSpec::None, true);
+    t[0xf1] = op(Mnemonic::Movbe, OpSpec::M, OpSpec::Gv, OpSpec::None, true);
+    return t;
+}
+
+// 66 0F 38: SSSE3 packed integer, SSE4.1, AES-NI.
+constexpr std::array<OpcodeEntry, 256> build_map38_66() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0x00] = op(Mnemonic::Pshufb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x01] = op(Mnemonic::Phaddw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x02] = op(Mnemonic::Phaddd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x03] = op(Mnemonic::Phaddsw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x04] = op(Mnemonic::Pmaddubsw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x05] = op(Mnemonic::Phsubw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x06] = op(Mnemonic::Phsubd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x07] = op(Mnemonic::Phsubsw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x08] = op(Mnemonic::Psignb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x09] = op(Mnemonic::Psignw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x0a] = op(Mnemonic::Psignd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x0b] = op(Mnemonic::Pmulhrsw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x10] = op(Mnemonic::Pblendvb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x14] = op(Mnemonic::Blendvps, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x15] = op(Mnemonic::Blendvpd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x17] = op(Mnemonic::Ptest, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x1c] = op(Mnemonic::Pabsb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x1d] = op(Mnemonic::Pabsw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x1e] = op(Mnemonic::Pabsd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x20] = op(Mnemonic::Pmovsxbw, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x21] = op(Mnemonic::Pmovsxbd, OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0x22] = op(Mnemonic::Pmovsxbq, OpSpec::Vx, OpSpec::Ww, OpSpec::None, true);
+    t[0x23] = op(Mnemonic::Pmovsxwd, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x24] = op(Mnemonic::Pmovsxwq, OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0x25] = op(Mnemonic::Pmovsxdq, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x28] = op(Mnemonic::Pmuldq, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x29] = op(Mnemonic::Pcmpeqq, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x2a] = op(Mnemonic::Movntdqa, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x2b] = op(Mnemonic::Packusdw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x30] = op(Mnemonic::Pmovzxbw, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x31] = op(Mnemonic::Pmovzxbd, OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0x32] = op(Mnemonic::Pmovzxbq, OpSpec::Vx, OpSpec::Ww, OpSpec::None, true);
+    t[0x33] = op(Mnemonic::Pmovzxwd, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x34] = op(Mnemonic::Pmovzxwq, OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
+    t[0x35] = op(Mnemonic::Pmovzxdq, OpSpec::Vx, OpSpec::Wsd, OpSpec::None, true);
+    t[0x37] = op(Mnemonic::Pcmpgtq, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x38] = op(Mnemonic::Pminsb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x39] = op(Mnemonic::Pminsd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x3a] = op(Mnemonic::Pminuw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x3b] = op(Mnemonic::Pminud, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x3c] = op(Mnemonic::Pmaxsb, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x3d] = op(Mnemonic::Pmaxsd, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x3e] = op(Mnemonic::Pmaxuw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x3f] = op(Mnemonic::Pmaxud, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x40] = op(Mnemonic::Pmulld, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0x41] = op(Mnemonic::Phminposuw, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xdb] = op(Mnemonic::Aesimc, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xdc] = op(Mnemonic::Aesenc, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xdd] = op(Mnemonic::Aesenclast, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xde] = op(Mnemonic::Aesdec, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    t[0xdf] = op(Mnemonic::Aesdeclast, OpSpec::Vx, OpSpec::Wx, OpSpec::None, true);
+    return t;
+}
+
+// F2 0F 38: SSE4.2 CRC32 (byte and default-size sources).
+constexpr std::array<OpcodeEntry, 256> build_map38_f2() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0xf0] = op(Mnemonic::Crc32, OpSpec::Gdq, OpSpec::Eb, OpSpec::None, true);
+    t[0xf1] = op(Mnemonic::Crc32, OpSpec::Gdq, OpSpec::Ev, OpSpec::None, true);
+    return t;
+}
+
+// 66 0F 3A: imm8-controlled SSE4.1 / PCLMUL / AES key generation.
+constexpr std::array<OpcodeEntry, 256> build_map3a_66() noexcept {
+    std::array<OpcodeEntry, 256> t{};
+    t[0x08] = op(Mnemonic::Roundps, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x09] = op(Mnemonic::Roundpd, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x0a] = op(Mnemonic::Roundss, OpSpec::Vx, OpSpec::Wss, OpSpec::Ib, true);
+    t[0x0b] = op(Mnemonic::Roundsd, OpSpec::Vx, OpSpec::Wsd, OpSpec::Ib, true);
+    t[0x0c] = op(Mnemonic::Blendps, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x0d] = op(Mnemonic::Blendpd, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x0e] = op(Mnemonic::Pblendw, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x0f] = op(Mnemonic::Palignr, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x14] = op(Mnemonic::Pextrb, OpSpec::RdMb, OpSpec::Vx, OpSpec::Ib, true);
+    t[0x15] = op(Mnemonic::Pextrw, OpSpec::RdMw, OpSpec::Vx, OpSpec::Ib, true);
+    t[0x16] = op(Mnemonic::Pextrd, OpSpec::Edq, OpSpec::Vx, OpSpec::Ib, true);
+    t[0x17] = op(Mnemonic::Extractps, OpSpec::Ed, OpSpec::Vx, OpSpec::Ib, true);
+    t[0x20] = op(Mnemonic::Pinsrb, OpSpec::Vx, OpSpec::RdMb, OpSpec::Ib, true);
+    t[0x21] = op(Mnemonic::Insertps, OpSpec::Vx, OpSpec::Wss, OpSpec::Ib, true);
+    t[0x22] = op(Mnemonic::Pinsrd, OpSpec::Vx, OpSpec::Edq, OpSpec::Ib, true);
+    t[0x40] = op(Mnemonic::Dpps, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x41] = op(Mnemonic::Dppd, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x42] = op(Mnemonic::Mpsadbw, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0x44] = op(Mnemonic::Pclmulqdq, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
+    t[0xdf] = op(Mnemonic::Aeskeygenassist, OpSpec::Vx, OpSpec::Wx, OpSpec::Ib, true);
     return t;
 }
 
@@ -558,6 +700,10 @@ constinit const std::array<OpcodeEntry, 256> kSecondary = build_secondary();
 constinit const std::array<OpcodeEntry, 256> kSecondary_66 = build_secondary_66();
 constinit const std::array<OpcodeEntry, 256> kSecondary_F3 = build_secondary_f3();
 constinit const std::array<OpcodeEntry, 256> kSecondary_F2 = build_secondary_f2();
+constinit const std::array<OpcodeEntry, 256> kMap38 = build_map38_none();
+constinit const std::array<OpcodeEntry, 256> kMap38_66 = build_map38_66();
+constinit const std::array<OpcodeEntry, 256> kMap38_F2 = build_map38_f2();
+constinit const std::array<OpcodeEntry, 256> kMap3A_66 = build_map3a_66();
 constinit const std::array<OpcodeEntry, 256> kVexMap2 = build_vex_map2_none();
 constinit const std::array<OpcodeEntry, 256> kVexMap2_66 = build_vex_map2_66();
 constinit const std::array<OpcodeEntry, 256> kVexMap2_F3 = build_vex_map2_f3();

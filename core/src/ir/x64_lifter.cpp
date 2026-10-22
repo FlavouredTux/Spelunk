@@ -67,6 +67,8 @@ void lift_instruction_body(LiftCtx& ctx) {
         case Mnemonic::Cmpxchg: lift_cmpxchg(ctx); break;
         case Mnemonic::Bsf:     lift_bit_scan(ctx, "bsf"); break;
         case Mnemonic::Bsr:     lift_bit_scan(ctx, "bsr"); break;
+        case Mnemonic::Lzcnt:   lift_bit_count(ctx, true); break;
+        case Mnemonic::Tzcnt:   lift_bit_count(ctx, false); break;
         case Mnemonic::Popcnt:  lift_popcnt(ctx);  break;
         case Mnemonic::Bt:      lift_bit_test(ctx, 't'); break;
         case Mnemonic::Bts:     lift_bit_test(ctx, 's'); break;
@@ -311,6 +313,126 @@ void lift_instruction_body(LiftCtx& ctx) {
         case Mnemonic::Pmuludq: lift_simd_binop(ctx, "_mm_mul_epu32",   IrType::I128); break;
         case Mnemonic::Pmaddwd: lift_simd_binop(ctx, "_mm_madd_epi16",  IrType::I128); break;
         case Mnemonic::Pinsrw:  lift_pinsrw(ctx); break;
+        // SSE / SSE2 baseline gaps.
+        case Mnemonic::Unpcklps: lift_simd_binop(ctx, "_mm_unpacklo_ps", IrType::I128); break;
+        case Mnemonic::Unpckhps: lift_simd_binop(ctx, "_mm_unpackhi_ps", IrType::I128); break;
+        case Mnemonic::Unpcklpd: lift_simd_binop(ctx, "_mm_unpacklo_pd", IrType::I128); break;
+        case Mnemonic::Unpckhpd: lift_simd_binop(ctx, "_mm_unpackhi_pd", IrType::I128); break;
+        case Mnemonic::Psadbw: lift_simd_binop(ctx, "_mm_sad_epu8", IrType::I128); break;
+        case Mnemonic::Packsswb: lift_simd_binop(ctx, "_mm_packs_epi16", IrType::I128); break;
+        case Mnemonic::Packssdw: lift_simd_binop(ctx, "_mm_packs_epi32", IrType::I128); break;
+        case Mnemonic::Packuswb: lift_simd_binop(ctx, "_mm_packus_epi16", IrType::I128); break;
+        case Mnemonic::Cvtdq2ps: lift_simd_unop(ctx, "_mm_cvtepi32_ps"); break;
+        case Mnemonic::Cvtps2dq: lift_simd_unop(ctx, "_mm_cvtps_epi32"); break;
+        case Mnemonic::Cvttps2dq: lift_simd_unop(ctx, "_mm_cvttps_epi32"); break;
+        case Mnemonic::Cvtdq2pd: lift_simd_unop(ctx, "_mm_cvtepi32_pd"); break;
+        case Mnemonic::Cvtpd2dq: lift_simd_unop(ctx, "_mm_cvtpd_epi32"); break;
+        case Mnemonic::Cvttpd2dq: lift_simd_unop(ctx, "_mm_cvttpd_epi32"); break;
+        case Mnemonic::Cvtps2pd: lift_simd_unop(ctx, "_mm_cvtps_pd"); break;
+        case Mnemonic::Cvtpd2ps: lift_simd_unop(ctx, "_mm_cvtpd_ps"); break;
+        case Mnemonic::Sqrtps: lift_simd_unop(ctx, "_mm_sqrt_ps"); break;
+        case Mnemonic::Sqrtpd: lift_simd_unop(ctx, "_mm_sqrt_pd"); break;
+        case Mnemonic::Cmpps:    lift_simd_cmp_predicate(ctx, "ps"); break;
+        case Mnemonic::Cmppd:    lift_simd_cmp_predicate(ctx, "pd"); break;
+        case Mnemonic::CmpsdXmm: lift_simd_cmp_predicate(ctx, "sd"); break;
+        case Mnemonic::Movmskps: lift_simd_to_gpr(ctx, "_mm_movemask_ps", IrType::I32); break;
+        case Mnemonic::Movmskpd: lift_simd_to_gpr(ctx, "_mm_movemask_pd", IrType::I32); break;
+        case Mnemonic::Movntdq:
+        case Mnemonic::Movntps:
+        case Mnemonic::Movntpd:
+        case Mnemonic::Movntdqa: lift_simd_mov(ctx, IrType::I128, false); break;
+        case Mnemonic::Movnti:   lift_mov(ctx); break;
+        case Mnemonic::Ldmxcsr:  lift_mxcsr(ctx, false); break;
+        case Mnemonic::Stmxcsr:  lift_mxcsr(ctx, true); break;
+        case Mnemonic::Lfence:   lift_intrinsic(ctx, "_mm_lfence"); break;
+        case Mnemonic::Mfence:   lift_intrinsic(ctx, "_mm_mfence"); break;
+        case Mnemonic::Sfence:   lift_intrinsic(ctx, "_mm_sfence"); break;
+        case Mnemonic::Clflush:  lift_clflush(ctx); break;
+        // Prefetch is a hint: no architectural effect.
+        case Mnemonic::Prefetch: break;
+        case Mnemonic::Fxsave:   lift_intrinsic(ctx, "x64.fxsave"); break;
+        case Mnemonic::Fxrstor:  lift_intrinsic(ctx, "x64.fxrstor"); break;
+        case Mnemonic::Xsave:    lift_intrinsic(ctx, "x64.xsave"); break;
+        case Mnemonic::Xrstor:   lift_intrinsic(ctx, "x64.xrstor"); break;
+        case Mnemonic::Xsaveopt: lift_intrinsic(ctx, "x64.xsaveopt"); break;
+
+        // SSSE3.
+        case Mnemonic::Pshufb: lift_simd_binop(ctx, "_mm_shuffle_epi8", IrType::I128); break;
+        case Mnemonic::Phaddw: lift_simd_binop(ctx, "_mm_hadd_epi16", IrType::I128); break;
+        case Mnemonic::Phaddd: lift_simd_binop(ctx, "_mm_hadd_epi32", IrType::I128); break;
+        case Mnemonic::Phaddsw: lift_simd_binop(ctx, "_mm_hadds_epi16", IrType::I128); break;
+        case Mnemonic::Pmaddubsw: lift_simd_binop(ctx, "_mm_maddubs_epi16", IrType::I128); break;
+        case Mnemonic::Phsubw: lift_simd_binop(ctx, "_mm_hsub_epi16", IrType::I128); break;
+        case Mnemonic::Phsubd: lift_simd_binop(ctx, "_mm_hsub_epi32", IrType::I128); break;
+        case Mnemonic::Phsubsw: lift_simd_binop(ctx, "_mm_hsubs_epi16", IrType::I128); break;
+        case Mnemonic::Psignb: lift_simd_binop(ctx, "_mm_sign_epi8", IrType::I128); break;
+        case Mnemonic::Psignw: lift_simd_binop(ctx, "_mm_sign_epi16", IrType::I128); break;
+        case Mnemonic::Psignd: lift_simd_binop(ctx, "_mm_sign_epi32", IrType::I128); break;
+        case Mnemonic::Pmulhrsw: lift_simd_binop(ctx, "_mm_mulhrs_epi16", IrType::I128); break;
+        case Mnemonic::Palignr: lift_simd_binop(ctx, "_mm_alignr_epi8", IrType::I128); break;
+        case Mnemonic::Pabsb: lift_simd_unop(ctx, "_mm_abs_epi8"); break;
+        case Mnemonic::Pabsw: lift_simd_unop(ctx, "_mm_abs_epi16"); break;
+        case Mnemonic::Pabsd: lift_simd_unop(ctx, "_mm_abs_epi32"); break;
+
+        // SSE4.1 / SSE4.2.
+        case Mnemonic::Pmuldq: lift_simd_binop(ctx, "_mm_mul_epi32", IrType::I128); break;
+        case Mnemonic::Pcmpeqq: lift_simd_binop(ctx, "_mm_cmpeq_epi64", IrType::I128); break;
+        case Mnemonic::Packusdw: lift_simd_binop(ctx, "_mm_packus_epi32", IrType::I128); break;
+        case Mnemonic::Pcmpgtq: lift_simd_binop(ctx, "_mm_cmpgt_epi64", IrType::I128); break;
+        case Mnemonic::Pminsb: lift_simd_binop(ctx, "_mm_min_epi8", IrType::I128); break;
+        case Mnemonic::Pminsd: lift_simd_binop(ctx, "_mm_min_epi32", IrType::I128); break;
+        case Mnemonic::Pminuw: lift_simd_binop(ctx, "_mm_min_epu16", IrType::I128); break;
+        case Mnemonic::Pminud: lift_simd_binop(ctx, "_mm_min_epu32", IrType::I128); break;
+        case Mnemonic::Pmaxsb: lift_simd_binop(ctx, "_mm_max_epi8", IrType::I128); break;
+        case Mnemonic::Pmaxsd: lift_simd_binop(ctx, "_mm_max_epi32", IrType::I128); break;
+        case Mnemonic::Pmaxuw: lift_simd_binop(ctx, "_mm_max_epu16", IrType::I128); break;
+        case Mnemonic::Pmaxud: lift_simd_binop(ctx, "_mm_max_epu32", IrType::I128); break;
+        case Mnemonic::Pmulld: lift_simd_binop(ctx, "_mm_mullo_epi32", IrType::I128); break;
+        case Mnemonic::Roundss: lift_simd_binop(ctx, "_mm_round_ss", IrType::I128); break;
+        case Mnemonic::Roundsd: lift_simd_binop(ctx, "_mm_round_sd", IrType::I128); break;
+        case Mnemonic::Blendps: lift_simd_binop(ctx, "_mm_blend_ps", IrType::I128); break;
+        case Mnemonic::Blendpd: lift_simd_binop(ctx, "_mm_blend_pd", IrType::I128); break;
+        case Mnemonic::Pblendw: lift_simd_binop(ctx, "_mm_blend_epi16", IrType::I128); break;
+        case Mnemonic::Insertps: lift_simd_binop(ctx, "_mm_insert_ps", IrType::I128); break;
+        case Mnemonic::Dpps: lift_simd_binop(ctx, "_mm_dp_ps", IrType::I128); break;
+        case Mnemonic::Dppd: lift_simd_binop(ctx, "_mm_dp_pd", IrType::I128); break;
+        case Mnemonic::Mpsadbw: lift_simd_binop(ctx, "_mm_mpsadbw_epu8", IrType::I128); break;
+        case Mnemonic::Pclmulqdq: lift_simd_binop(ctx, "_mm_clmulepi64_si128", IrType::I128); break;
+        case Mnemonic::Aesenc: lift_simd_binop(ctx, "_mm_aesenc_si128", IrType::I128); break;
+        case Mnemonic::Aesenclast: lift_simd_binop(ctx, "_mm_aesenclast_si128", IrType::I128); break;
+        case Mnemonic::Aesdec: lift_simd_binop(ctx, "_mm_aesdec_si128", IrType::I128); break;
+        case Mnemonic::Aesdeclast: lift_simd_binop(ctx, "_mm_aesdeclast_si128", IrType::I128); break;
+        case Mnemonic::Pmovsxbw: lift_simd_unop(ctx, "_mm_cvtepi8_epi16"); break;
+        case Mnemonic::Pmovsxbd: lift_simd_unop(ctx, "_mm_cvtepi8_epi32"); break;
+        case Mnemonic::Pmovsxbq: lift_simd_unop(ctx, "_mm_cvtepi8_epi64"); break;
+        case Mnemonic::Pmovsxwd: lift_simd_unop(ctx, "_mm_cvtepi16_epi32"); break;
+        case Mnemonic::Pmovsxwq: lift_simd_unop(ctx, "_mm_cvtepi16_epi64"); break;
+        case Mnemonic::Pmovsxdq: lift_simd_unop(ctx, "_mm_cvtepi32_epi64"); break;
+        case Mnemonic::Pmovzxbw: lift_simd_unop(ctx, "_mm_cvtepu8_epi16"); break;
+        case Mnemonic::Pmovzxbd: lift_simd_unop(ctx, "_mm_cvtepu8_epi32"); break;
+        case Mnemonic::Pmovzxbq: lift_simd_unop(ctx, "_mm_cvtepu8_epi64"); break;
+        case Mnemonic::Pmovzxwd: lift_simd_unop(ctx, "_mm_cvtepu16_epi32"); break;
+        case Mnemonic::Pmovzxwq: lift_simd_unop(ctx, "_mm_cvtepu16_epi64"); break;
+        case Mnemonic::Pmovzxdq: lift_simd_unop(ctx, "_mm_cvtepu32_epi64"); break;
+        case Mnemonic::Roundps: lift_simd_unop(ctx, "_mm_round_ps"); break;
+        case Mnemonic::Roundpd: lift_simd_unop(ctx, "_mm_round_pd"); break;
+        case Mnemonic::Phminposuw: lift_simd_unop(ctx, "_mm_minpos_epu16"); break;
+        case Mnemonic::Aesimc: lift_simd_unop(ctx, "_mm_aesimc_si128"); break;
+        case Mnemonic::Aeskeygenassist: lift_simd_unop(ctx, "_mm_aeskeygenassist_si128"); break;
+        case Mnemonic::Pblendvb:  lift_simd_blendv(ctx, "_mm_blendv_epi8"); break;
+        case Mnemonic::Blendvps:  lift_simd_blendv(ctx, "_mm_blendv_ps"); break;
+        case Mnemonic::Blendvpd:  lift_simd_blendv(ctx, "_mm_blendv_pd"); break;
+        case Mnemonic::Ptest:     lift_ptest(ctx); break;
+        case Mnemonic::Pextrb:    lift_simd_to_gpr(ctx, "_mm_extract_epi8", IrType::I32); break;
+        case Mnemonic::Pextrd:    lift_simd_to_gpr(ctx, "_mm_extract_epi32", IrType::I32); break;
+        case Mnemonic::Pextrq:    lift_simd_to_gpr(ctx, "_mm_extract_epi64", IrType::I64); break;
+        case Mnemonic::Extractps: lift_simd_to_gpr(ctx, "_mm_extract_ps", IrType::I32); break;
+        case Mnemonic::Pinsrb:    lift_simd_insert(ctx, "_mm_insert_epi8", IrType::I32); break;
+        case Mnemonic::Pinsrd:    lift_simd_insert(ctx, "_mm_insert_epi32", IrType::I32); break;
+        case Mnemonic::Pinsrq:    lift_simd_insert(ctx, "_mm_insert_epi64", IrType::I64); break;
+        case Mnemonic::Crc32:     lift_crc32(ctx); break;
+        case Mnemonic::Movbe:     lift_movbe(ctx); break;
+
         case Mnemonic::Pextrw:  lift_pextrw(ctx); break;
 
         // Saturating arith.
@@ -402,8 +524,10 @@ void lift_instruction_body(LiftCtx& ctx) {
         case Mnemonic::MovdqaStore: lift_simd_mov(ctx, IrType::I128, true);  break;
         case Mnemonic::Movdqu:      lift_simd_mov(ctx, IrType::I128, false); break;
         case Mnemonic::MovdquStore: lift_simd_mov(ctx, IrType::I128, true);  break;
-        case Mnemonic::Movhps:      lift_simd_mov(ctx, IrType::F64,  false); break;
-        case Mnemonic::Movlps:      lift_simd_mov(ctx, IrType::F64,  false); break;
+        case Mnemonic::Movhps:
+        case Mnemonic::Movlps:
+        case Mnemonic::MovhpsStore:
+        case Mnemonic::MovlpsStore: lift_half_move(ctx); break;
 
         // movd / movq: scalar transfer between XMM low lane and gpr-or-mem.
         case Mnemonic::Movd:

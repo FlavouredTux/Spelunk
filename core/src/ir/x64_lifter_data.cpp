@@ -181,6 +181,44 @@ void lift_bit_scan(LiftCtx& ctx, std::string_view name) {
     store_lvalue(insn.operands[0], r, ctx);
 }
 
+// LZCNT / TZCNT dst, src. A 16-bit source goes through the 32-bit
+// intrinsic with a sentinel bit that makes zero count as 16. CF reports a
+// zero source and ZF a zero count.
+void lift_bit_count(LiftCtx& ctx, bool leading) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    const IrType t = operand_type(insn.operands[0]);
+    IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), t, /*sign_ext=*/false);
+    ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpEq, src, ctx.imm(0, t)));
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
+    ctx.last_pf_value = {};
+    ctx.last_flag_src = {};
+    IrValue operand = src;
+    if (t == IrType::I16) {
+        operand = ctx.match_size(src, IrType::I32, /*sign_ext=*/false);
+        if (leading) {
+            operand = ctx.emit_binop(IrOp::Or,
+                ctx.emit_binop(IrOp::Shl, operand, ctx.imm(16, IrType::I32)),
+                ctx.imm(0x8000, IrType::I32));
+        } else {
+            operand = ctx.emit_binop(IrOp::Or, operand, ctx.imm(0x10000, IrType::I32));
+        }
+    }
+    const bool wide = t == IrType::I64;
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = std::format("{}_u{}", leading ? "_lzcnt" : "_tzcnt", wide ? 64 : 32);
+    i.dst = ctx.temp(wide ? IrType::I64 : IrType::I32);
+    i.srcs[0] = operand;
+    i.src_count = 1;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    result = ctx.match_size(result, t, /*sign_ext=*/false);
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, result, ctx.imm(0, t)));
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
 // POPCNT dst, src: dst = number of set bits in src. ZF reflects whether the
 // source was zero; other status flags are architecturally cleared, but ZF is
 // the one emitted code commonly consumes.

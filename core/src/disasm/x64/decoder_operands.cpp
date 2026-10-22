@@ -287,6 +287,10 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
             const u8 reg_ext = static_cast<u8>((ctx.rex_r ? 8u : 0u) | ((ctx.modrm >> 3) & 7));
             return Operand::make_reg(gpr(reg_ext, os, ctx.rex_present));
         }
+        case OpSpec::Gdq: {
+            const u8 reg_ext = static_cast<u8>((ctx.rex_r ? 8u : 0u) | ((ctx.modrm >> 3) & 7));
+            return Operand::make_reg(gpr(reg_ext, ctx.rex_w ? 8u : 4u, ctx.rex_present));
+        }
         case OpSpec::Gw: {
             const u8 reg_ext = static_cast<u8>((ctx.rex_r ? 8u : 0u) | ((ctx.modrm >> 3) & 7));
             return Operand::make_reg(gpr(reg_ext, 2, ctx.rex_present));
@@ -403,6 +407,21 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
             const unsigned scalar_size =
                 (ctx.vex || ctx.evex) && ctx.vex_map == 2 && ctx.rex_w ? 8u : 4u;
             return decode_modrm_rm(ctx, scalar_size, /*mem_only=*/true);
+        }
+        case OpSpec::Ww: {
+            const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
+            if (mod == 3) {
+                const u8 rm_ext =
+                    static_cast<u8>((ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
+                return Operand::make_reg(vector_reg(rm_ext, 16));
+            }
+            return decode_modrm_rm(ctx, 2, /*mem_only=*/true);
+        }
+        case OpSpec::RdMb:
+        case OpSpec::RdMw: {
+            const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
+            if (mod == 3) return decode_modrm_rm(ctx, 4, false);
+            return decode_modrm_rm(ctx, spec == OpSpec::RdMb ? 1u : 2u, /*mem_only=*/true);
         }
         case OpSpec::Wsd: {
             const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);

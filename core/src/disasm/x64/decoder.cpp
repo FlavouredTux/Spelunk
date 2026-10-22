@@ -25,6 +25,10 @@ using x64_decode::kSecondary;
 using x64_decode::kSecondary_66;
 using x64_decode::kSecondary_F2;
 using x64_decode::kSecondary_F3;
+using x64_decode::kMap38;
+using x64_decode::kMap38_66;
+using x64_decode::kMap38_F2;
+using x64_decode::kMap3A_66;
 using x64_decode::kVexMap2;
 using x64_decode::kVexMap2_66;
 using x64_decode::kVexMap2_F2;
@@ -62,6 +66,10 @@ void promote_size_sensitive_mnemonics(const Context& ctx, Instruction& insn) noe
         insn.mnemonic = Mnemonic::MovqGpr;
     } else if (insn.mnemonic == Mnemonic::MovdStore && ctx.rex_w) {
         insn.mnemonic = Mnemonic::MovqGprStore;
+    } else if (insn.mnemonic == Mnemonic::Pextrd && ctx.rex_w) {
+        insn.mnemonic = Mnemonic::Pextrq;
+    } else if (insn.mnemonic == Mnemonic::Pinsrd && ctx.rex_w) {
+        insn.mnemonic = Mnemonic::Pinsrq;
     }
     if (ctx.rex_w) {
         switch (insn.mnemonic) {
@@ -293,22 +301,70 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             }
         }
 
-        // Mandatory-prefix dispatch: 0x66 / 0xF3 / 0xF2 before 0x0F select
-        // SSE secondary tables. Consuming the prefix for dispatch means we
-        // shouldn't also interpret it as opsize/rep - clear the bit.
-        // Either a real mnemonic OR a group entry (mnemonic=Invalid,
-        // group!=0 - opcode-extension dispatch) counts as "the 66 table
-        // owns this opcode".
-        entry = &kSecondary[opcode];
-        if (ctx.prefix.opsize && has_entry(kSecondary_66[opcode])) {
-            entry = &kSecondary_66[opcode];
-            ctx.prefix.opsize = false;
-        } else if (ctx.prefix.rep && has_entry(kSecondary_F3[opcode])) {
-            entry = &kSecondary_F3[opcode];
-            ctx.prefix.rep = false;
-        } else if (ctx.prefix.repne && has_entry(kSecondary_F2[opcode])) {
-            entry = &kSecondary_F2[opcode];
-            ctx.prefix.repne = false;
+        // Legacy three-byte maps. F2 (CRC32) outranks 66, which CRC32 uses
+        // as its operand-size prefix.
+        if (opcode == 0x38 || opcode == 0x3A) {
+            auto op2_r = ctx.read_u8();
+            if (!op2_r) return std::unexpected(std::move(op2_r).error());
+            const u8 escape = opcode;
+            opcode = *op2_r;
+            ctx.opcode = opcode;
+            ctx.opcode_low3 = static_cast<u8>(opcode & 7);
+            if (escape == 0x38 && ctx.prefix.repne && has_entry(kMap38_F2[opcode])) {
+                entry = &kMap38_F2[opcode];
+                ctx.prefix.repne = false;
+            } else if (ctx.prefix.opsize &&
+                       has_entry(escape == 0x38 ? kMap38_66[opcode] : kMap3A_66[opcode])) {
+                entry = escape == 0x38 ? &kMap38_66[opcode] : &kMap3A_66[opcode];
+                ctx.prefix.opsize = false;
+            } else if (escape == 0x38 && !ctx.prefix.opsize && !ctx.prefix.rep &&
+                       !ctx.prefix.repne) {
+                entry = &kMap38[opcode];
+            }
+            if (!entry || !has_entry(*entry)) {
+                return std::unexpected(Error::not_implemented(std::format(
+                    "x64: unsupported opcode 0f {:02x} {:#04x} at {:#x}", escape, opcode, addr)));
+            }
+        }
+        // Group 15 splits on ModR/M.mod: fences in the register form,
+        // MXCSR / FXSAVE / XSAVE / CLFLUSH with memory.
+        else if (opcode == 0xAE && !ctx.prefix.opsize && !ctx.prefix.rep &&
+                 !ctx.prefix.repne && !ctx.eof()) {
+            const u8 modrm = static_cast<u8>(ctx.code[ctx.pos]);
+            const u8 reg = static_cast<u8>((modrm >> 3) & 7);
+            static constexpr Mnemonic kMemory[8] = {
+                Mnemonic::Fxsave, Mnemonic::Fxrstor, Mnemonic::Ldmxcsr, Mnemonic::Stmxcsr,
+                Mnemonic::Xsave, Mnemonic::Xrstor, Mnemonic::Xsaveopt, Mnemonic::Clflush};
+            static constexpr Mnemonic kRegister[8] = {
+                Mnemonic::Invalid, Mnemonic::Invalid, Mnemonic::Invalid, Mnemonic::Invalid,
+                Mnemonic::Invalid, Mnemonic::Lfence, Mnemonic::Mfence, Mnemonic::Sfence};
+            legacy_entry = OpcodeEntry{};
+            legacy_entry.modrm = true;
+            if ((modrm >> 6) == 3) {
+                legacy_entry.mnemonic = kRegister[reg];
+            } else {
+                legacy_entry.mnemonic = kMemory[reg];
+                legacy_entry.op1 = OpSpec::M;
+            }
+            entry = &legacy_entry;
+        } else {
+            // Mandatory-prefix dispatch: 0x66 / 0xF3 / 0xF2 before 0x0F select
+            // SSE secondary tables. Consuming the prefix for dispatch means we
+            // shouldn't also interpret it as opsize/rep - clear the bit.
+            // Either a real mnemonic OR a group entry (mnemonic=Invalid,
+            // group!=0 - opcode-extension dispatch) counts as "the 66 table
+            // owns this opcode".
+            entry = &kSecondary[opcode];
+            if (ctx.prefix.opsize && has_entry(kSecondary_66[opcode])) {
+                entry = &kSecondary_66[opcode];
+                ctx.prefix.opsize = false;
+            } else if (ctx.prefix.rep && has_entry(kSecondary_F3[opcode])) {
+                entry = &kSecondary_F3[opcode];
+                ctx.prefix.rep = false;
+            } else if (ctx.prefix.repne && has_entry(kSecondary_F2[opcode])) {
+                entry = &kSecondary_F2[opcode];
+                ctx.prefix.repne = false;
+            }
         }
     } else {
         ctx.opcode = opcode;

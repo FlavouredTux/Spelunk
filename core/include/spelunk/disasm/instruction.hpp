@@ -121,7 +121,11 @@ enum class Mnemonic : u16 {
     Movaps,      // 0x0F 28
     MovapsStore, // 0x0F 29
     Movhps,      // 0x0F 16
-    Movlps,      // 0x0F 12
+    Movlps,      // 0x0F 12 (register source: movhlps)
+    MovhpsStore, // 0x0F 17
+    MovlpsStore, // 0x0F 13
+    Lzcnt,       // 0xF3 0x0F BD
+    Tzcnt,       // 0xF3 0x0F BC
     // Packed-single logical / arithmetic (0x0F 5x, no mandatory prefix).
     // The 0x0F 0x50–0x5F range was entirely absent before, so any
     // `xorps xmm0, xmm0` stopped linear disassembly dead and the caller
@@ -204,6 +208,27 @@ enum class Mnemonic : u16 {
     Psrlw, Psrld, Psrlq, Psrldq,
     Psraw, Psrad,
     Pinsrw,      // 0x66 0x0F C4 - pinsrw xmm, r32, imm8
+    // SSE/SSE2 baseline gaps, SSSE3 / SSE4.1 / SSE4.2 (legacy 0F 38 and
+    // 0F 3A maps), AES-NI, PCLMUL, CRC32, MXCSR, fences and prefetch.
+    Cvtdq2ps, Cvtps2dq, Cvttps2dq, Cvtdq2pd, Cvtpd2dq, Cvttpd2dq,
+    Cvtps2pd, Cvtpd2ps, Sqrtps, Sqrtpd, Cmpps, Cmppd,
+    CmpsdXmm, Unpcklps, Unpckhps, Unpcklpd, Unpckhpd, Movmskps,
+    Movmskpd, Psadbw, Packsswb, Packssdw, Packuswb, Movntdq,
+    Movntps, Movntpd, Movnti, Ldmxcsr, Stmxcsr, Lfence,
+    Mfence, Sfence, Clflush, Prefetch, Fxsave, Fxrstor,
+    Xsave, Xrstor, Xsaveopt, Pshufb, Phaddw, Phaddd,
+    Phaddsw, Pmaddubsw, Phsubw, Phsubd, Phsubsw, Psignb,
+    Psignw, Psignd, Pmulhrsw, Pabsb, Pabsw, Pabsd,
+    Palignr, Pblendvb, Blendvps, Blendvpd, Ptest, Pmovsxbw,
+    Pmovsxbd, Pmovsxbq, Pmovsxwd, Pmovsxwq, Pmovsxdq, Pmovzxbw,
+    Pmovzxbd, Pmovzxbq, Pmovzxwd, Pmovzxwq, Pmovzxdq, Pmuldq,
+    Pcmpeqq, Movntdqa, Packusdw, Pcmpgtq, Pminsb, Pminsd,
+    Pminuw, Pminud, Pmaxsb, Pmaxsd, Pmaxuw, Pmaxud,
+    Pmulld, Phminposuw, Roundps, Roundpd, Roundss, Roundsd,
+    Blendps, Blendpd, Pblendw, Pextrb, Pextrd, Pextrq,
+    Extractps, Pinsrb, Insertps, Pinsrd, Pinsrq, Dpps,
+    Dppd, Mpsadbw, Pclmulqdq, Aesenc, Aesenclast, Aesdec,
+    Aesdeclast, Aesimc, Aeskeygenassist, Crc32, Movbe,
     // Bit-scan and double-shift - GPR ops, not SSE.
     Bsf,         // 0x0F BC
     Bsr,         // 0x0F BD

@@ -137,6 +137,29 @@ void Emitter::analyze_seh_frame() {
         return inst.segment == Reg::Fs && inst.src_count >= 1 &&
                inst.srcs[0].kind == IrValueKind::Imm && inst.srcs[0].imm == 0;
     };
+    // A frame helper (__SEH_prolog4) linked the registration itself; the
+    // lifter marked it. Its call site pushed the scope table into the try
+    // level slot and the frame size above it.
+    for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+        const auto& bb = fn->blocks[bi];
+        for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+            const auto& inst = bb.insts[ii];
+            if (inst.op != IrOp::Intrinsic || inst.name != "x86.seh_frame" ||
+                inst.src_count < 2) continue;
+            const auto level = entry_stack_offset(inst.srcs[0]);
+            if (!level) continue;
+            seh_try_level = level;
+            if (const auto handler = resolve_imm(inst.srcs[1]); handler && *handler)
+                seh_handler = static_cast<u64>(*handler);
+            for (std::size_t jj = 0; jj < ii; ++jj) {
+                const auto& store = bb.insts[jj];
+                if (store.op != IrOp::Store || store.src_count < 2) continue;
+                const auto offset = entry_stack_offset(store.srcs[0]);
+                if (offset == *level || offset == *level + 4) hidden.insert({bi, jj});
+            }
+            return;
+        }
+    }
     std::optional<i64> record;
     for (const auto& bb : fn->blocks) {
         for (const auto& inst : bb.insts) {

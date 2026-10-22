@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include <spelunk/analysis/x86.hpp>
 #include <spelunk/ir/x64_lifter.hpp>
 #include <spelunk/disasm/register.hpp>
 #include <spelunk/ir/abi.hpp>
@@ -58,6 +59,7 @@ struct LiftCtx {
     const std::unordered_map<addr_t, u16>* call_pops = nullptr;
     // x86: caller-saved registers each call (by address) leaves untouched.
     const std::unordered_map<addr_t, std::vector<Reg>>* call_preserved = nullptr;
+    const std::unordered_map<addr_t, X86FrameHelper>* frame_helpers = nullptr;
     bool preserve_scalar_lanes = false;
 
     [[nodiscard]] bool mode32() const noexcept { return is_x86_32_abi(abi); }

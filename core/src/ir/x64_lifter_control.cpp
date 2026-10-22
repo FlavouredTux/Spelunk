@@ -113,7 +113,47 @@ void emit_arg_barriers(LiftCtx& ctx) {
     fill_fp("call.fp_args.3", 6);
 }
 
+// A call into an MSVC frame helper (__SEH_prolog4 and kin) builds or tears
+// down this function's frame: apply its effect on ebp and esp in place of a
+// call, and mark the exception registration it links.
+bool lift_frame_helper_call(LiftCtx& ctx) {
+    if (!ctx.mode32() || !ctx.frame_helpers) return false;
+    const auto found = ctx.frame_helpers->find(ctx.insn->address);
+    if (found == ctx.frame_helpers->end()) return false;
+    const X86FrameHelper& helper = found->second;
+    const IrValue sp = ctx.read_reg(Reg::Rsp);
+    const IrValue fp = ctx.read_reg(Reg::Rbp);
+    const auto value = [&](const X86FrameValue& v) {
+        const IrValue base = v.base == X86FrameValue::Base::CallSp ? sp : fp;
+        const IrValue at = v.offset == 0 ? base
+            : ctx.emit_binop(IrOp::Add, base, ctx.imm(v.offset, IrType::I32));
+        return v.load ? ctx.emit_load(at, IrType::I32) : at;
+    };
+    const IrValue new_fp = value(helper.fp);
+    const IrValue new_sp = value(helper.sp);
+    ctx.write_reg(Reg::Rbp, new_fp);
+    ctx.write_reg(Reg::Rsp, new_sp);
+    for (Reg r : helper.clobbers) {
+        IrInst clobber;
+        clobber.op = IrOp::Clobber;
+        clobber.dst = ctx.reg(r);
+        ctx.emit(std::move(clobber));
+    }
+    if (helper.links_seh) {
+        // The try level lives just below the frame pointer.
+        IrInst mark;
+        mark.op = IrOp::Intrinsic;
+        mark.name = "x86.seh_frame";
+        mark.srcs[0] = ctx.emit_binop(IrOp::Add, ctx.read_reg(Reg::Rbp), ctx.imm(-4, IrType::I32));
+        mark.srcs[1] = ctx.imm(helper.handler.value_or(0), IrType::I32);
+        mark.src_count = 2;
+        ctx.emit(std::move(mark));
+    }
+    return true;
+}
+
 void lift_call(LiftCtx& ctx) {
+    if (lift_frame_helper_call(ctx)) return;
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 1) return;
     const auto& op = insn.operands[0];

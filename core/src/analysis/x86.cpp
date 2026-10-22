@@ -569,6 +569,191 @@ X86FunctionInfo analyze_uncached(const Binary& binary, X86Memo& memo, addr_t ent
     return info;
 }
 
+
+// Symbolic execution of a straight-line frame helper. Values are constants,
+// addresses relative to the caller's esp before the call or its ebp, the
+// word stored at such an address, or unknown.
+struct FrameSym {
+    enum class Kind : u8 { Unknown, Imm, Ptr, Load, ReturnAddress };
+    Kind kind = Kind::Unknown;
+    X86FrameValue::Base base = X86FrameValue::Base::CallSp;
+    i64 value = 0;
+
+    static FrameSym imm(i64 v) { return {Kind::Imm, {}, v}; }
+    static FrameSym ptr(X86FrameValue::Base b, i64 off) { return {Kind::Ptr, b, off}; }
+    [[nodiscard]] bool is_ptr() const { return kind == Kind::Ptr; }
+};
+
+std::optional<X86FrameHelper>
+simulate_frame_helper(const Binary& binary, addr_t entry,
+                      const std::vector<FrameSym>& pushed, FrameSym eax) {
+    using Base = X86FrameValue::Base;
+    using Kind = FrameSym::Kind;
+    const X64Decoder decoder(false);
+    std::array<FrameSym, 8> regs{};   // eax..edi
+    std::map<std::pair<Base, i64>, FrameSym> stack;
+    const auto index = [](Reg r) -> std::optional<std::size_t> {
+        const Reg canon = canonical_reg(r);
+        if (canon < Reg::Rax || canon > Reg::Rdi) return std::nullopt;
+        return static_cast<std::size_t>(canon) - static_cast<std::size_t>(Reg::Rax);
+    };
+    constexpr std::size_t kEsp = 4, kEbp = 5;
+    regs[0] = eax;
+    regs[kEsp] = FrameSym::ptr(Base::CallSp, -4);
+    regs[kEbp] = FrameSym::ptr(Base::CallerFp, 0);
+    stack[{Base::CallSp, -4}] = {Kind::ReturnAddress, {}, 0};
+    for (std::size_t i = 0; i < pushed.size(); ++i)
+        stack[{Base::CallSp, static_cast<i64>(4 * i)}] = pushed[i];
+
+    X86FrameHelper result;
+    std::optional<FrameSym> record;
+    std::array<bool, 3> written{};   // eax, ecx, edx
+    const auto address = [&](const Mem& m) -> std::optional<std::pair<Base, i64>> {
+        if (m.segment != Reg::None || m.index != Reg::None) return std::nullopt;
+        const auto base = index(m.base);
+        if (!base || !regs[*base].is_ptr()) return std::nullopt;
+        return std::pair{regs[*base].base, regs[*base].value + m.disp};
+    };
+    const auto read = [&](const Operand& op) -> FrameSym {
+        if (op.kind == Operand::Kind::Immediate) return FrameSym::imm(op.imm.value);
+        if (op.kind == Operand::Kind::Register) {
+            const auto r = index(op.reg);
+            return r && reg_size(op.reg) == 4 ? regs[*r] : FrameSym{};
+        }
+        if (op.kind != Operand::Kind::Memory) return {};
+        const auto at = address(op.mem);
+        if (!at) return {};
+        const auto found = stack.find(*at);
+        return found != stack.end() ? found->second : FrameSym{Kind::Load, at->first, at->second};
+    };
+    // False when the write leaves esp or ebp unknowable.
+    const auto write = [&](const Operand& op, FrameSym value) -> bool {
+        if (op.kind == Operand::Kind::Register) {
+            const auto r = index(op.reg);
+            if (!r) return true;
+            if (reg_size(op.reg) != 4) value = {};
+            if ((*r == kEsp || *r == kEbp) && value.kind != Kind::Ptr && value.kind != Kind::Load)
+                return false;
+            if (*r < written.size()) written[*r] = true;
+            regs[*r] = value;
+            return true;
+        }
+        if (op.kind != Operand::Kind::Memory) return true;
+        if (op.mem.segment == Reg::Fs && op.mem.base == Reg::None && op.mem.disp == 0) {
+            if (value.is_ptr()) {
+                result.links_seh = true;
+                record = value;
+            }
+            return true;
+        }
+        if (const auto at = address(op.mem)) stack[*at] = value;
+        return true;
+    };
+    const auto push = [&](FrameSym value) -> bool {
+        if (!regs[kEsp].is_ptr()) return false;
+        regs[kEsp].value -= 4;
+        stack[{regs[kEsp].base, regs[kEsp].value}] = value;
+        return true;
+    };
+    const auto pop = [&]() -> std::optional<FrameSym> {
+        if (!regs[kEsp].is_ptr()) return std::nullopt;
+        const auto found = stack.find({regs[kEsp].base, regs[kEsp].value});
+        FrameSym value = found != stack.end() ? found->second
+            : FrameSym{Kind::Load, regs[kEsp].base, regs[kEsp].value};
+        regs[kEsp].value += 4;
+        return value;
+    };
+
+    addr_t pc = entry;
+    for (int step = 0; step < 64; ++step) {
+        const auto bytes = binary.bytes_at(pc);
+        if (bytes.empty()) return std::nullopt;
+        const auto decoded = decoder.decode(bytes, pc);
+        if (!decoded) return std::nullopt;
+        const Instruction& insn = *decoded;
+        pc += insn.length;
+        const auto& dst = insn.operands[0];
+        switch (insn.mnemonic) {
+            case Mnemonic::Push:
+                if (!push(read(dst))) return std::nullopt;
+                continue;
+            case Mnemonic::Pop: {
+                const auto value = pop();
+                if (!value || !write(dst, *value)) return std::nullopt;
+                continue;
+            }
+            case Mnemonic::Mov:
+                if (!write(dst, read(insn.operands[1]))) return std::nullopt;
+                continue;
+            case Mnemonic::Lea: {
+                const auto at = address(insn.operands[1].mem);
+                if (!write(dst, at ? FrameSym::ptr(at->first, at->second) : FrameSym{}))
+                    return std::nullopt;
+                continue;
+            }
+            case Mnemonic::Add:
+            case Mnemonic::Sub: {
+                FrameSym value = read(dst);
+                const FrameSym amount = read(insn.operands[1]);
+                const i64 sign = insn.mnemonic == Mnemonic::Add ? 1 : -1;
+                if ((value.is_ptr() || value.kind == Kind::Imm) && amount.kind == Kind::Imm)
+                    value.value += sign * amount.value;
+                else
+                    value = {};
+                if (!write(dst, value)) return std::nullopt;
+                continue;
+            }
+            case Mnemonic::Leave: {
+                regs[kEsp] = regs[kEbp];
+                const auto value = pop();
+                if (!value || !write(Operand::make_reg(Reg::Ebp), *value)) return std::nullopt;
+                continue;
+            }
+            case Mnemonic::Call:
+                // __security_check_cookie in an epilogue: balanced, and it
+                // keeps eax - the value the function is returning.
+                if (!branch_target(insn)) return std::nullopt;
+                regs[1] = regs[2] = {};
+                written[1] = written[2] = true;
+                continue;
+            case Mnemonic::Jmp:
+                if (const auto target = branch_target(insn)) {
+                    pc = *target;
+                    continue;
+                }
+                return std::nullopt;
+            case Mnemonic::Ret: {
+                const auto returned = pop();
+                if (!returned || returned->kind != Kind::ReturnAddress) return std::nullopt;
+                if (insn.num_operands && insn.operands[0].kind == Operand::Kind::Immediate)
+                    regs[kEsp].value += insn.operands[0].imm.value;
+                break;
+            }
+            default:
+                if (ends_basic_block(insn.mnemonic)) return std::nullopt;
+                if (insn.num_operands && !write(dst, {})) return std::nullopt;
+                continue;
+        }
+        break;
+    }
+    const FrameSym sp = regs[kEsp];
+    const FrameSym fp = regs[kEbp];
+    if (!sp.is_ptr() || (fp.kind != Kind::Ptr && fp.kind != Kind::Load)) return std::nullopt;
+    const bool fp_changed = !(fp.is_ptr() && fp.base == Base::CallerFp && fp.value == 0);
+    if (!fp_changed && !result.links_seh) return std::nullopt;
+    for (std::size_t r = 0; r < written.size(); ++r) {
+        if (written[r]) result.clobbers.push_back(static_cast<Reg>(static_cast<unsigned>(Reg::Rax) + r));
+    }
+    result.sp = {sp.base, static_cast<i32>(sp.value), false};
+    result.fp = {fp.base, static_cast<i32>(fp.value), fp.kind == Kind::Load};
+    if (record) {
+        const auto handler = stack.find({record->base, record->value + 4});
+        if (handler != stack.end() && handler->second.kind == Kind::Imm)
+            result.handler = static_cast<u32>(handler->second.value);
+    }
+    return result;
+}
+
 }  // namespace
 
 X86FunctionInfo analyze_x86_function(const Binary& binary, addr_t entry) {
@@ -755,6 +940,41 @@ x86_call_preserved(const Binary& binary, const Function& fn) {
         }
     }
     return preserved;
+}
+
+std::unordered_map<addr_t, X86FrameHelper>
+x86_frame_helpers(const Binary& binary, const Function& fn) {
+    std::unordered_map<addr_t, X86FrameHelper> helpers;
+    for (const auto& block : fn.blocks) {
+        const auto& insns = block.instructions;
+        for (std::size_t i = 0; i < insns.size(); ++i) {
+            if (insns[i].mnemonic != Mnemonic::Call) continue;
+            const auto target = branch_target(insns[i]);
+            if (!target) continue;
+            // What the call site hands over: its pushes, nearest first, and
+            // a constant in eax (`mov eax, handler; call __EH_prolog3`).
+            std::vector<FrameSym> pushed;
+            std::optional<FrameSym> eax;
+            for (std::size_t j = i; j-- > 0 && pushed.size() < 8;) {
+                const auto& prior = insns[j];
+                if (prior.mnemonic == Mnemonic::Push) {
+                    pushed.push_back(prior.operands[0].kind == Operand::Kind::Immediate
+                        ? FrameSym::imm(prior.operands[0].imm.value) : FrameSym{});
+                    continue;
+                }
+                if (prior.mnemonic == Mnemonic::Call || mentions_esp(prior)) break;
+                if (!eax && prior.mnemonic == Mnemonic::Mov && prior.num_operands == 2 &&
+                    prior.operands[0].kind == Operand::Kind::Register &&
+                    prior.operands[0].reg == Reg::Eax &&
+                    prior.operands[1].kind == Operand::Kind::Immediate) {
+                    eax = FrameSym::imm(prior.operands[1].imm.value);
+                }
+            }
+            if (auto helper = simulate_frame_helper(binary, *target, pushed, eax.value_or(FrameSym{})))
+                helpers.emplace(insns[i].address, *helper);
+        }
+    }
+    return helpers;
 }
 
 }  // namespace spelunk

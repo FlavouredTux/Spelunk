@@ -524,6 +524,8 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
     const auto call_preserved = x86 && resolve_function_abi_
         ? x86_call_preserved(*binary_, fn)
         : std::unordered_map<addr_t, std::vector<Reg>>{};
+    const auto frame_helpers = x86 ? x86_frame_helpers(*binary_, fn)
+                                   : std::unordered_map<addr_t, X86FrameHelper>{};
     IrFunction ir;
     ir.start = fn.start;
     ir.end   = fn.end;
@@ -562,6 +564,7 @@ Result<IrFunction> X64Lifter::lift(const Function& fn) const {
         ctx.binary = binary_;
         ctx.call_pops = &call_pops;
         ctx.call_preserved = &call_preserved;
+        ctx.frame_helpers = &frame_helpers;
         ctx.preserve_scalar_lanes = preserve_scalar_lanes;
 
         for (const auto& insn : src_bb.instructions) {

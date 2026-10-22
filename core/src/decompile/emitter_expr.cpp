@@ -910,6 +910,11 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // into the structured branch.
                 return "";
             }
+            if (inst.name == "x86.seh_frame") {
+                return std::format("/* SEH frame: handler {} */",
+                                   seh_handler ? function_display_name(static_cast<addr_t>(*seh_handler))
+                                               : std::string("?"));
+            }
             if (!options.c_source && inst.dst.kind == IrValueKind::None) {
                 if (auto memory = render_rep_string_statement(inst)) return *memory;
             }

@@ -427,6 +427,7 @@ void Emitter::emit_region(const Region& r, int depth, std::string& out) const {
         case RegionKind::IfElse:       emit_region_if_else  (r, depth, out); return;
         case RegionKind::While:        emit_region_while    (r, depth, out); return;
         case RegionKind::Loop:
+            emit_loop_entry_assignments(r, depth, out);
             out += std::format("{}for (;;) {{\n", ind);
             for (const auto& c : r.children) emit_region(*c, depth + 1, out);
             out += std::format("{}}}\n", ind);
@@ -585,6 +586,72 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
     out += std::format("{}}}\n", ind);
 }
 
+// A loop phi whose entry value was not coalesced into its local - a guarded
+// rotated loop, `if (!p) return; do { ... } while (p)`, where the guard
+// also reads the value - has nothing assigning the local before the first
+// iteration. Seed it at the loop head, which only the entry edges reach.
+void Emitter::emit_loop_entry_assignments(const Region& r, int depth, std::string& out) const {
+    if (!fn || explicit_phi_copies) return;
+    // The header is the loop's first block.
+    const Region* first = &r;
+    while (first->block_start == 0 && !first->children.empty() && first->children[0])
+        first = first->children[0].get();
+    const auto header = fn->block_at.find(first->block_start);
+    if (header == fn->block_at.end()) return;
+    std::set<addr_t> inside;
+    const auto collect = [&](this const auto& self, const Region& region) -> void {
+        inside.insert(region.block_start);
+        for (const auto& child : region.children) {
+            if (child) self(*child);
+        }
+    };
+    collect(r);
+    const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    for (const IrInst& phi : fn->blocks[header->second].insts) {
+        if (phi.op != IrOp::Phi || phi.phi_operands.size() != phi.phi_preds.size()) continue;
+        const auto key = ssa_key(phi.dst);
+        const auto named = key ? merge_value_names.find(*key) : merge_value_names.end();
+        if (named == merge_value_names.end()) continue;
+        // A local declared with its entry value needs no seed, nor does one
+        // the body never reads.
+        const auto local = merge_locals.find(named->second);
+        if (local == merge_locals.end() || local->second.initializer ||
+            std::ranges::none_of(local->second.keys, [&](const SsaKey& k) {
+                return ssa_uses.visible_use_count(k) > 0;
+            })) continue;
+        std::optional<IrValue> seed;
+        bool usable = true;
+        for (std::size_t i = 0; i < phi.phi_preds.size() && usable; ++i) {
+            if (inside.contains(phi.phi_preds[i])) continue;
+            const IrValue& operand = phi.phi_operands[i];
+            const auto predecessor = fn->block_at.find(phi.phi_preds[i]);
+            const auto edge = merge_edge_assignments.find(phi.phi_preds[i]);
+            usable = predecessor != fn->block_at.end() &&
+                (edge == merge_edge_assignments.end() ||
+                 std::ranges::none_of(edge->second, [&](const auto& assignment) {
+                     return assignment.first == named->second;
+                 })) &&
+                (!seed || same_value_key(*seed, operand) ||
+                 (seed->kind == IrValueKind::Imm && operand.kind == IrValueKind::Imm &&
+                  seed->imm == operand.imm));
+            seed = operand;
+        }
+        if (!usable || !seed) continue;
+        if (auto seed_key = ssa_key(*seed)) {
+            // A coalesced feeder already assigns the merge local.
+            if (auto same = merge_value_names.find(*seed_key);
+                same != merge_value_names.end() && same->second == named->second) continue;
+        }
+        const IrInst* definition = def_of(*seed);
+        if (definition && definition->op == IrOp::Clobber) continue;
+        if (renders_raw_arch_reg_name(*seed)) continue;
+        const std::string value = expr(*seed);
+        if (seed->kind == IrValueKind::Reg && value == display_reg_name(seed->reg)) continue;
+        emit_materializations_for_rendered_value(*seed, value, out, ind);
+        out += std::format("{}{} = {};\n", ind, named->second, value);
+    }
+}
+
 void Emitter::emit_region_while(const Region& r, int depth, std::string& out) const {
     // Two render shapes for a top-tested loop:
     //
@@ -600,6 +667,7 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
     // user originally wrote.
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string inner_ind(static_cast<std::size_t>(depth + 1) * 2u, ' ');
+    emit_loop_entry_assignments(r, depth, out);
 
     const auto bindings_before_header = emitted_bindings;
     auto header_buf = RenderChunk::capture(
@@ -641,6 +709,7 @@ void Emitter::emit_region_do_while(const Region& r, int depth, std::string& out)
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const auto condition_key = ssa_key(r.condition);
     if (condition_key) deferred_ctr_conditions.insert(*condition_key);
+    emit_loop_entry_assignments(r, depth, out);
     out += std::format("{}do {{\n", ind);
     for (const auto& c : r.children) emit_region(*c, depth + 1, out);
     if (condition_key) active_ctr_tail_conditions.insert(*condition_key);
@@ -667,6 +736,7 @@ void Emitter::emit_region_for(const Region& r, int depth, std::string& out) cons
         emit_region_while(r, depth, out);
         return;
     }
+    emit_loop_entry_assignments(r, depth, out);
     const std::string cond = render_condition(r.condition, r.invert);
     emit_materializations_for_rendered_value(r.condition, cond, out, ind);
     out += std::format("{}for (; {}; {}) {{\n", ind, cond, update);
@@ -783,7 +853,7 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
 
 void Emitter::emit_region_switch(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
-    const std::string_view rn = reg_name(r.switch_index);
+    const std::string_view rn = display_reg_name(r.switch_index);
     const std::string selector = r.condition.kind != IrValueKind::None
         ? expr(r.condition)
         : (rn.empty() ? std::string("<idx>") : std::string(rn));

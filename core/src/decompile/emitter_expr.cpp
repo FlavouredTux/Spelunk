@@ -161,9 +161,11 @@ std::string Emitter::expr_uncached(const IrValue& v, int depth, int min_prec) co
     // rendering correctly says `a2`.
     if (d.segment == Reg::None) {
         if (auto off = stack_offset(d.srcs[0]); off) {
+            // The forwarded value can be a reload of this same slot (a
+            // register spilled back to its home); depth ends that cycle.
             if (auto it = init_only_slot_value.find(*off);
-                it != init_only_slot_value.end()) {
-                return expr(it->second, depth, min_prec);
+                it != init_only_slot_value.end() && depth < kMaxExprDepth) {
+                return expr(it->second, depth + 1, min_prec);
             }
         }
         // The load width describes pointer storage, not its pointee.  If

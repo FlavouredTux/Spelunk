@@ -99,7 +99,16 @@ void walk_from(const Binary& b, const Decoder& dec, WalkState& ws, addr_t entry,
             if (bytes.empty()) break;
 
             auto decoded = dec.decode(bytes, ip);
-            if (!decoded) break;
+            if (!decoded) {
+                // Keep the path: a reader must see that code continues in
+                // bytes we cannot decode, not lose the whole branch.
+                Instruction undecoded;
+                undecoded.address = ip;
+                undecoded.length = 1;
+                undecoded.mnemonic = Mnemonic::Undecoded;
+                ws.insns.emplace(ip, undecoded);
+                break;
+            }
 
             auto [it, _] = ws.insns.emplace(ip, *decoded);
             const Instruction& insn = it->second;

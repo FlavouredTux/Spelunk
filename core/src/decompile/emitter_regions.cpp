@@ -854,6 +854,15 @@ void Emitter::emit_region_for(const Region& r, int depth, std::string& out) cons
 
 void Emitter::emit_region_return(const Region& r, int depth, std::string& out) const {
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
+    // A path that runs into undecodable bytes does not return.
+    if (fn) {
+        if (const auto block = fn->block_at.find(r.block_start); block != fn->block_at.end()) {
+            const auto& insts = fn->blocks[block->second].insts;
+            if (std::ranges::any_of(insts, [](const IrInst& inst) {
+                    return inst.op == IrOp::Intrinsic && inst.name == "spelunk.undecoded";
+                })) return;
+        }
+    }
     addr_t return_source = 0;
     IrValue returned = r.condition;
     if (fn) {

@@ -843,6 +843,13 @@ void lift_instruction(LiftCtx& ctx) {
         case Mnemonic::A64Tbnz: lift_tbz(ctx, true);  break;
 
         case Mnemonic::A64Nop:                           break;
+        case Mnemonic::Undecoded: {
+            lift_intrinsic(ctx, "spelunk.undecoded");
+            IrInst i;
+            i.op = IrOp::Unreachable;
+            ctx.emit(std::move(i));
+            break;
+        }
         case Mnemonic::A64Brk: case Mnemonic::A64Udf:    {
             IrInst i;
             i.op = IrOp::Unreachable;

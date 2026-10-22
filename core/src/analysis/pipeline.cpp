@@ -544,6 +544,12 @@ format_struct(const Binary& b, const FuncWindow& w,
                         w.label, target)));
                 }
             }
+            for (const auto& insn : block.instructions) {
+                if (insn.mnemonic != Mnemonic::Undecoded) continue;
+                return std::unexpected(Error::not_implemented(std::format(
+                    "C export for {} is incomplete: undecoded control-flow target {:#x}; use -d to inspect it",
+                    w.label, insn.address)));
+            }
         }
     }
 

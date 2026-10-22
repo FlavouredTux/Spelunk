@@ -754,6 +754,10 @@ void lift_instruction(LiftCtx& ctx) {
 
         case Mnemonic::A32Nop: break;
         case Mnemonic::A32Svc: lift_intrinsic(ctx, "syscall"); break;
+        case Mnemonic::Undecoded: {
+            lift_intrinsic(ctx, "spelunk.undecoded");
+            IrInst i; i.op = IrOp::Unreachable; ctx.emit(std::move(i)); break;
+        }
         case Mnemonic::A32Bkpt:
         case Mnemonic::A32Udf: {
             IrInst i; i.op = IrOp::Unreachable; ctx.emit(std::move(i)); break;

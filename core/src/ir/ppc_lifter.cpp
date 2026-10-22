@@ -837,6 +837,13 @@ bool lift_system(LiftCtx& ctx) {
         case Mnemonic::Twi:
             lift_intrinsic(ctx, "ppc.twi");
             break;
+        case Mnemonic::Undecoded: {
+            lift_intrinsic(ctx, "spelunk.undecoded");
+            IrInst i;
+            i.op = IrOp::Unreachable;
+            ctx.emit(std::move(i));
+            break;
+        }
         case Mnemonic::Dcbf:
             lift_intrinsic(ctx, "ppc.dcbf");
             break;

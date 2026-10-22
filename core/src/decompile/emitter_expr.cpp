@@ -885,6 +885,18 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             // with -fcf-protection (Ubuntu 24.04's gcc-14 defaults to it).
             // They're NOPs semantically, so suppress them from the output.
             if (inst.name == "endbr64" || inst.name == "endbr32") return "";
+            if (inst.name == "spelunk.undecoded") {
+                std::string bytes;
+                if (binary) {
+                    const auto raw = binary->bytes_at(inst.source_addr);
+                    for (std::size_t i = 0; i < raw.size() && i < 8; ++i) {
+                        bytes += std::format("{}{:02x}", i ? " " : "",
+                                             std::to_integer<unsigned>(raw[i]));
+                    }
+                }
+                return std::format("__undecoded({:#x}); /* undecodable instruction: {} */",
+                                   inst.source_addr, bytes);
+            }
             std::string args;
             for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
                 if (i > 0) args += ", ";

@@ -60,6 +60,9 @@ enum class Mnemonic : u16 {
     Beq, Bne, Blt, Bge, Bgt, Ble, Bdnz, Bdz, Bc, Bclr, Bcctr,
 
     Nop, Hlt, Int, Int3, Syscall, Ud2, Isync, Sync, Rfi, Sc, Twi,
+    // Bytes the decoder could not decode. The CFG ends the path here so
+    // the code is reported instead of silently dropped.
+    Undecoded,
     Lahf, Sahf, Cmc, Clc, Stc, Cli, Sti, Cld, StdDir,
     Dcbf, Dcbst, Dcbi, Dcbz, DcbzL, Icbi,
     Cdq, Cqo, Cwde, Cdqe,
@@ -493,7 +496,7 @@ struct Instruction {
 
 [[nodiscard]] constexpr bool is_return_like(Mnemonic m) noexcept {
     return m == Mnemonic::Ret || m == Mnemonic::Ud2 || m == Mnemonic::Hlt ||
-           m == Mnemonic::A64Ret || m == Mnemonic::A64Brk ||
+           m == Mnemonic::Undecoded || m == Mnemonic::A64Ret || m == Mnemonic::A64Brk ||
            m == Mnemonic::A64Udf || m == Mnemonic::A64Eret ||
            m == Mnemonic::A32Ret || m == Mnemonic::A32Udf;
 }

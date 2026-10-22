@@ -122,6 +122,10 @@ void lift_instruction_body(LiftCtx& ctx) {
         case Mnemonic::Ud2:
             lift_unreachable(ctx);
             break;
+        case Mnemonic::Undecoded:
+            lift_intrinsic(ctx, "spelunk.undecoded");
+            lift_unreachable(ctx);
+            break;
         case Mnemonic::Syscall:
             lift_intrinsic(ctx, "syscall");
             break;

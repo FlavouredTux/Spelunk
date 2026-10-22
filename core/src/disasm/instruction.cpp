@@ -245,6 +245,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Int3:     return "int3";
         case Mnemonic::Syscall:  return "syscall";
         case Mnemonic::Ud2:      return "ud2";
+        case Mnemonic::Undecoded: return "(bad)";
         case Mnemonic::Lahf:     return "lahf";
         case Mnemonic::Sahf:     return "sahf";
         case Mnemonic::Cmc:      return "cmc";

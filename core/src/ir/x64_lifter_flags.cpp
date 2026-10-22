@@ -184,12 +184,14 @@ void lift_bmi_three_operand(LiftCtx& ctx, Mnemonic mnemonic) {
         ctx.clear_cf_of();
         // ANDN leaves PF undefined, so do not infer it from the result.
         ctx.last_flag_src = {};
-    } else if (mnemonic == Mnemonic::Shlx) {
-        result = ctx.emit_binop(IrOp::Shl, first, second);
-    } else if (mnemonic == Mnemonic::Shrx) {
-        result = ctx.emit_binop(IrOp::Lshr, first, second);
-    } else if (mnemonic == Mnemonic::Sarx) {
-        result = ctx.emit_binop(IrOp::Ashr, first, second);
+    } else if (mnemonic == Mnemonic::Shlx || mnemonic == Mnemonic::Shrx ||
+               mnemonic == Mnemonic::Sarx) {
+        // The count is taken modulo the operand width, as for shl/shr/sar.
+        const IrValue count = ctx.emit_binop(IrOp::And, second,
+            ctx.imm(type_bits(result_type) - 1, result_type));
+        result = ctx.emit_binop(mnemonic == Mnemonic::Shlx ? IrOp::Shl
+                                : (mnemonic == Mnemonic::Shrx ? IrOp::Lshr : IrOp::Ashr),
+                                first, count);
     } else {
         IrInst intrinsic;
         intrinsic.op = IrOp::Intrinsic;
@@ -230,39 +232,6 @@ void lift_mulx(LiftCtx& ctx) {
     }
     for (u8 output = 0; output < 2; ++output)
         store_lvalue(insn.operands[output], results[output], ctx);
-}
-
-void lift_fma(LiftCtx& ctx) {
-    const auto& insn = *ctx.insn;
-    if (insn.num_operands != 3) return;
-    const bool scalar_single = insn.mnemonic == Mnemonic::Vfmadd132ss ||
-        insn.mnemonic == Mnemonic::Vfmadd213ss ||
-        insn.mnemonic == Mnemonic::Vfmadd231ss;
-    const bool scalar_double = insn.mnemonic == Mnemonic::Vfmadd132sd ||
-        insn.mnemonic == Mnemonic::Vfmadd213sd ||
-        insn.mnemonic == Mnemonic::Vfmadd231sd;
-    IrType type = scalar_single ? IrType::F32 :
-        (scalar_double ? IrType::F64 :
-            (insn.x86_vector_bits == 3 ? IrType::I512 :
-             (insn.x86_vector_bits == 2 ? IrType::I256 : IrType::I128)));
-    IrValue destination = read_xmm(ctx, insn.operands[0], type);
-    IrValue first = read_xmm(ctx, insn.operands[1], type);
-    IrValue second = read_xmm(ctx, insn.operands[2], type);
-    if (destination.kind == IrValueKind::None || first.kind == IrValueKind::None ||
-        second.kind == IrValueKind::None) return;
-    IrInst intrinsic;
-    intrinsic.op = IrOp::Intrinsic;
-    intrinsic.name = std::string(mnemonic_name(insn.mnemonic));
-    if (type == IrType::I256) intrinsic.name = "_mm256_" + intrinsic.name;
-    else if (type == IrType::I512) intrinsic.name = "_mm512_" + intrinsic.name;
-    intrinsic.dst = ctx.temp(type);
-    intrinsic.srcs[0] = destination;
-    intrinsic.srcs[1] = first;
-    intrinsic.srcs[2] = second;
-    intrinsic.src_count = 3;
-    IrValue result = intrinsic.dst;
-    ctx.emit(std::move(intrinsic));
-    write_xmm(ctx, insn.operands[0], result, type);
 }
 
 void lift_intrinsic(LiftCtx& ctx, std::string_view name) {

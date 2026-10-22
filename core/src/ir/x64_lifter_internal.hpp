@@ -568,7 +568,16 @@ void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing);
 // `op xmm, xmm/m [, imm8]` whose result depends only on the source:
 // conversions, sqrt, pabs, pmovsx/zx, round. A narrow memory source (the
 // m64 of cvtdq2pd, the m32 of pmovsxbd) loads only its own bytes.
-void lift_simd_unop(LiftCtx& ctx, std::string_view name);
+// Source and destination widths of a vector op relative to VEX.L: same,
+// a half-width source (vcvtps2pd, vpmovzx, broadcasts) or a half-width
+// result (vcvtpd2ps).
+enum class VectorShape : u8 { Same, Widening, Narrowing };
+
+[[nodiscard]] IrType vector_type(const Instruction& insn) noexcept;
+[[nodiscard]] std::string vector_name(std::string_view name, IrType type);
+
+void lift_simd_unop(LiftCtx& ctx, std::string_view name,
+                    VectorShape shape = VectorShape::Same);
 
 // Vector source, scalar GPR or memory destination: movmsk*, pextr*,
 // extractps.
@@ -583,7 +592,17 @@ void lift_simd_cmp_predicate(LiftCtx& ctx, std::string_view suffix);
 // pblendvb / blendvps / blendvpd with the implicit xmm0 selector.
 void lift_simd_blendv(LiftCtx& ctx, std::string_view name);
 
-void lift_ptest(LiftCtx& ctx);
+void lift_ptest(LiftCtx& ctx, std::string_view suffix = "si128");
+void lift_permutevar(LiftCtx& ctx, std::string_view name);
+void lift_insert128(LiftCtx& ctx, std::string_view name);
+void lift_vector_narrow_out(LiftCtx& ctx, std::string_view name, bool keep_immediate);
+void lift_masked_move(LiftCtx& ctx, std::string_view name, bool store);
+void lift_vex_scalar_merge(LiftCtx& ctx, bool single);
+void lift_vzeroall(LiftCtx& ctx);
+void lift_fma4(LiftCtx& ctx);
+void lift_adx(LiftCtx& ctx, Flag chain);
+void lift_value_intrinsic(LiftCtx& ctx, std::string_view name);
+void lift_xgetbv(LiftCtx& ctx);
 void lift_crc32(LiftCtx& ctx);
 void lift_movbe(LiftCtx& ctx);
 void lift_mxcsr(LiftCtx& ctx, bool store);
@@ -592,6 +611,9 @@ void lift_clflush(LiftCtx& ctx);
 // and the register forms movhlps / movlhps.
 void lift_half_move(LiftCtx& ctx);
 void lift_bit_count(LiftCtx& ctx, bool leading);
+void lift_bmi1(LiftCtx& ctx);
+void lift_bextr(LiftCtx& ctx);
+void lift_rorx(LiftCtx& ctx);
 
 void lift_gpr_scalar_to_xmm(LiftCtx& ctx);
 

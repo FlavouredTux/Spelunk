@@ -41,10 +41,15 @@ enum class OpSpec : u8 {
     // Emitted for `movss`/`addss`/... (32-bit scalar single) and
     // `movsd`/`addsd`/... (64-bit scalar double).
     Wss, Wsd,
-    // xmm register or 2-byte memory (pmovsxbq / pmovzxbq / wq sources).
-    Ww,
+    // xmm register or 2-byte / 1-byte memory (pmovsxbq, vpbroadcastw/b).
+    Ww, Wb,
     // 32-bit GPR from r/m, or byte / word memory (pextrb, pinsrb, pextrw).
     RdMb, RdMw,
+    // XMM register or 128-bit memory whatever VEX.L says (the 128-bit half
+    // of vinserti128 / vextracti128 / vbroadcasti128).
+    Wdq,
+    // VEX "is4" register: bits 7:4 of a trailing imm8 (vblendvps ...).
+    Lx,
 };
 
 struct OpcodeEntry {
@@ -77,6 +82,11 @@ struct Context {
     u8 vector_mask = 0;
     bool vector_zeroing = false;
     bool vector_broadcast = false;
+    // VEX.256 forms whose source is half the destination width (vcvtps2pd,
+    // vpmovzx, vcvtph2ps): the register source stays an XMM and memory
+    // doubles. Narrowing forms (vcvtpd2ps) write an XMM destination.
+    bool widening_source = false;
+    bool narrowing_destination = false;
     bool default_64 = false;
     bool mode64 = true;
     u8 opcode = 0;
@@ -144,6 +154,7 @@ enum GroupId : u8 {
     // extension select psllw/pslld/psllq/pslldq, psrlw/psrld/psrlq/
     // psrldq, psraw/psrad over the (xmm-from-r/m, imm8) shape.
     Grp_71_66, Grp_72_66, Grp_73_66,
+    Grp_17_Vex,
     Grp_Count,
 };
 
@@ -156,7 +167,10 @@ extern const std::array<OpcodeEntry, 256> kSecondary_F2;
 extern const std::array<OpcodeEntry, 256> kMap38;
 extern const std::array<OpcodeEntry, 256> kMap38_66;
 extern const std::array<OpcodeEntry, 256> kMap38_F2;
+extern const std::array<OpcodeEntry, 256> kMap38_F3;
 extern const std::array<OpcodeEntry, 256> kMap3A_66;
+extern const std::array<OpcodeEntry, 256> kVexMap3_66;
+extern const std::array<OpcodeEntry, 256> kVexMap3_F2;
 extern const std::array<OpcodeEntry, 256> kVexMap2;
 extern const std::array<OpcodeEntry, 256> kVexMap2_66;
 extern const std::array<OpcodeEntry, 256> kVexMap2_F3;

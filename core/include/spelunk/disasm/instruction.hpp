@@ -67,6 +67,12 @@ enum class Mnemonic : u16 {
     Dcbf, Dcbst, Dcbi, Dcbz, DcbzL, Icbi,
     Cdq, Cqo, Cwde, Cdqe,
     Endbr64, Endbr32,
+    // x87 wait, XGETBV, RDRAND/RDSEED, CET RDSSP, CMPXCHG16B, ADX and AMD FMA4.
+    Fwait, Xgetbv, Rdrand, Rdseed, Rdssp, Cmpxchg16b,
+    Adcx, Adox, Fma4Fmaddsubps, Fma4Fmaddsubpd, Fma4Fmsubaddps, Fma4Fmsubaddpd,
+    Fma4Fmaddps, Fma4Fmaddpd, Fma4Fmaddss, Fma4Fmaddsd, Fma4Fmsubps, Fma4Fmsubpd,
+    Fma4Fmsubss, Fma4Fmsubsd, Fma4Fnmaddps, Fma4Fnmaddpd, Fma4Fnmaddss, Fma4Fnmaddsd,
+    Fma4Fnmsubps, Fma4Fnmsubpd, Fma4Fnmsubss, Fma4Fnmsubsd,
     // System-instruction zero-operand mnemonics. Common in anti-debug:
     // rdtsc + cpuid for timing / VM detection. wrmsr/rdmsr/rdpmc rarer
     // but cheap to add. Lifted as side-effecting intrinsics that the
@@ -98,6 +104,26 @@ enum class Mnemonic : u16 {
     Vfmadd132ps, Vfmadd132pd, Vfmadd132ss, Vfmadd132sd,
     Vfmadd213ps, Vfmadd213pd, Vfmadd213ss, Vfmadd213sd,
     Vfmadd231ps, Vfmadd231pd, Vfmadd231ss, Vfmadd231sd,
+    // The rest of FMA3, AVX/AVX2 permutes, broadcasts, lane inserts and
+    // masked moves, SSE3 horizontal ops, BMI1 and RORX.
+    Vfmsub132ps, Vfmsub132pd, Vfmsub132ss, Vfmsub132sd, Vfmsub213ps, Vfmsub213pd,
+    Vfmsub213ss, Vfmsub213sd, Vfmsub231ps, Vfmsub231pd, Vfmsub231ss, Vfmsub231sd,
+    Vfnmadd132ps, Vfnmadd132pd, Vfnmadd132ss, Vfnmadd132sd, Vfnmadd213ps, Vfnmadd213pd,
+    Vfnmadd213ss, Vfnmadd213sd, Vfnmadd231ps, Vfnmadd231pd, Vfnmadd231ss, Vfnmadd231sd,
+    Vfnmsub132ps, Vfnmsub132pd, Vfnmsub132ss, Vfnmsub132sd, Vfnmsub213ps, Vfnmsub213pd,
+    Vfnmsub213ss, Vfnmsub213sd, Vfnmsub231ps, Vfnmsub231pd, Vfnmsub231ss, Vfnmsub231sd,
+    Vfmaddsub132ps, Vfmaddsub132pd, Vfmaddsub213ps, Vfmaddsub213pd, Vfmaddsub231ps, Vfmaddsub231pd,
+    Vfmsubadd132ps, Vfmsubadd132pd, Vfmsubadd213ps, Vfmsubadd213pd, Vfmsubadd231ps, Vfmsubadd231pd,
+    Vzeroall, Vbroadcastss, Vbroadcastsd, Vbroadcastf128, Vbroadcasti128, Vpbroadcastb,
+    Vpbroadcastw, Vpbroadcastd, Vpbroadcastq, Vpermq, Vpermpd, Vpermd,
+    Vpermps, Vperm2i128, Vperm2f128, Vpermilps, Vpermilpd, Vinserti128,
+    Vinsertf128, Vextracti128, Vextractf128, Vpblendd, Vpsllvd, Vpsllvq,
+    Vpsrlvd, Vpsrlvq, Vpsravd, Vtestps, Vtestpd, Vcvtph2ps,
+    Vcvtps2ph, Vmaskmovps, Vmaskmovpd, VmaskmovpsStore, VmaskmovpdStore, Vpmaskmovd,
+    Vpmaskmovq, VpmaskmovdStore, VpmaskmovqStore, Haddps, Haddpd, Hsubps,
+    Hsubpd, Addsubps, Addsubpd, Movddup, Movshdup, Movsldup,
+    Lddqu, Rcpps, Rsqrtps, Blsr, Blsmsk, Blsi,
+    Bextr, Rorx,
 
     // ---- SSE (decoded to advance length; lifted as intrinsics) ------------
     Movd,        // 0x66 0x0F 6E - movd xmm, r/m32

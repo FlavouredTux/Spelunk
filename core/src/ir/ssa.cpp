@@ -23,8 +23,10 @@ namespace spelunk {
 
 namespace {
 
-// Map every sub-register (al/ah/ax/eax) to its 64-bit canonical form. Xmm
-// registers are self-canonical - we don't model sub-xmm slicing.
+// Map every sub-register (al/ah/ax/eax) to its 64-bit canonical form. YMM
+// and ZMM registers share their XMM register's SSA variable (the value type
+// carries the width), so a `vextracti128 xmm1, ymm0` / `xmm0` read sees the
+// last write to ymm0.
 constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::None,
     Reg::Rax, Reg::Rcx, Reg::Rdx, Reg::Rbx,
@@ -54,22 +56,22 @@ constexpr std::array<Reg, static_cast<std::size_t>(Reg::Count)> kCanonical = {
     Reg::Xmm20, Reg::Xmm21, Reg::Xmm22, Reg::Xmm23,
     Reg::Xmm24, Reg::Xmm25, Reg::Xmm26, Reg::Xmm27,
     Reg::Xmm28, Reg::Xmm29, Reg::Xmm30, Reg::Xmm31,
-    Reg::Ymm0,  Reg::Ymm1,  Reg::Ymm2,  Reg::Ymm3,
-    Reg::Ymm4,  Reg::Ymm5,  Reg::Ymm6,  Reg::Ymm7,
-    Reg::Ymm8,  Reg::Ymm9,  Reg::Ymm10, Reg::Ymm11,
-    Reg::Ymm12, Reg::Ymm13, Reg::Ymm14, Reg::Ymm15,
-    Reg::Ymm16, Reg::Ymm17, Reg::Ymm18, Reg::Ymm19,
-    Reg::Ymm20, Reg::Ymm21, Reg::Ymm22, Reg::Ymm23,
-    Reg::Ymm24, Reg::Ymm25, Reg::Ymm26, Reg::Ymm27,
-    Reg::Ymm28, Reg::Ymm29, Reg::Ymm30, Reg::Ymm31,
-    Reg::Zmm0,  Reg::Zmm1,  Reg::Zmm2,  Reg::Zmm3,
-    Reg::Zmm4,  Reg::Zmm5,  Reg::Zmm6,  Reg::Zmm7,
-    Reg::Zmm8,  Reg::Zmm9,  Reg::Zmm10, Reg::Zmm11,
-    Reg::Zmm12, Reg::Zmm13, Reg::Zmm14, Reg::Zmm15,
-    Reg::Zmm16, Reg::Zmm17, Reg::Zmm18, Reg::Zmm19,
-    Reg::Zmm20, Reg::Zmm21, Reg::Zmm22, Reg::Zmm23,
-    Reg::Zmm24, Reg::Zmm25, Reg::Zmm26, Reg::Zmm27,
-    Reg::Zmm28, Reg::Zmm29, Reg::Zmm30, Reg::Zmm31,
+    Reg::Xmm0,  Reg::Xmm1,  Reg::Xmm2,  Reg::Xmm3,
+    Reg::Xmm4,  Reg::Xmm5,  Reg::Xmm6,  Reg::Xmm7,
+    Reg::Xmm8,  Reg::Xmm9,  Reg::Xmm10, Reg::Xmm11,
+    Reg::Xmm12, Reg::Xmm13, Reg::Xmm14, Reg::Xmm15,
+    Reg::Xmm16, Reg::Xmm17, Reg::Xmm18, Reg::Xmm19,
+    Reg::Xmm20, Reg::Xmm21, Reg::Xmm22, Reg::Xmm23,
+    Reg::Xmm24, Reg::Xmm25, Reg::Xmm26, Reg::Xmm27,
+    Reg::Xmm28, Reg::Xmm29, Reg::Xmm30, Reg::Xmm31,
+    Reg::Xmm0,  Reg::Xmm1,  Reg::Xmm2,  Reg::Xmm3,
+    Reg::Xmm4,  Reg::Xmm5,  Reg::Xmm6,  Reg::Xmm7,
+    Reg::Xmm8,  Reg::Xmm9,  Reg::Xmm10, Reg::Xmm11,
+    Reg::Xmm12, Reg::Xmm13, Reg::Xmm14, Reg::Xmm15,
+    Reg::Xmm16, Reg::Xmm17, Reg::Xmm18, Reg::Xmm19,
+    Reg::Xmm20, Reg::Xmm21, Reg::Xmm22, Reg::Xmm23,
+    Reg::Xmm24, Reg::Xmm25, Reg::Xmm26, Reg::Xmm27,
+    Reg::Xmm28, Reg::Xmm29, Reg::Xmm30, Reg::Xmm31,
     Reg::K0, Reg::K1, Reg::K2, Reg::K3,
     Reg::K4, Reg::K5, Reg::K6, Reg::K7,
     Reg::PpcR0,  Reg::PpcR1,  Reg::PpcR2,  Reg::PpcR3,
@@ -214,12 +216,21 @@ void insert_phis(IrFunction& fn,
     std::map<VarKey, std::set<addr_t>> defs;
     std::map<VarKey, IrType> observed_types;
     std::set<VarKey> type_conflicts;
+    // XMM / YMM / ZMM share a variable; a merge carries the widest value
+    // any definition writes.
+    std::map<VarKey, IrType> widest_vector;
     for (const auto& bb : fn.blocks) {
         for (const auto& inst : bb.insts) {
             if (auto v = variable_of(inst.dst); v) {
                 defs[*v].insert(bb.start);
                 auto [it, inserted] = observed_types.emplace(*v, inst.dst.type);
                 if (!inserted && it->second != inst.dst.type) type_conflicts.insert(*v);
+                if (type_bits(inst.dst.type) > 128) {
+                    auto [widest, fresh] = widest_vector.emplace(*v, inst.dst.type);
+                    if (!fresh && type_bits(inst.dst.type) > type_bits(widest->second)) {
+                        widest->second = inst.dst.type;
+                    }
+                }
             }
         }
     }
@@ -269,6 +280,9 @@ void insert_phis(IrFunction& fn,
                         // the lifter's concrete type instead of reconstructing
                         // it from the architecture-neutral register size.
                         type = observed->second;
+                    }
+                    if (const auto widest = widest_vector.find(var); widest != widest_vector.end()) {
+                        type = widest->second;
                     }
                     phi.dst = IrValue::make_reg(canon, type);
                 } else {

@@ -58,6 +58,11 @@ constexpr Reg kGpr64[16] = {
     }
 }
 
+// A widening VEX.256 source reads twice the memory of its VEX.128 form.
+[[nodiscard]] unsigned widened(const Context& ctx) noexcept {
+    return ctx.widening_source && ctx.vector_bytes == 32 ? 2u : 1u;
+}
+
 [[nodiscard]] constexpr Reg vector_reg(u8 index, u8 bytes) noexcept {
     index &= 31u;
     if (bytes == 64) {
@@ -379,7 +384,23 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
                 static_cast<u8>((ctx.vex_r2 ? 16u : 0u) |
                                 (ctx.rex_r ? 8u : 0u) |
                                 ((ctx.modrm >> 3) & 7));
-            return Operand::make_reg(vector_reg(reg_ext, ctx.vector_bytes));
+            return Operand::make_reg(vector_reg(reg_ext,
+                ctx.narrowing_destination ? u8{16} : ctx.vector_bytes));
+        }
+        case OpSpec::Wdq: {
+            const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
+            if (mod == 3) {
+                const u8 rm_ext =
+                    static_cast<u8>((ctx.vex_b2 ? 16u : 0u) |
+                                    (ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
+                return Operand::make_reg(vector_reg(rm_ext, 16));
+            }
+            return decode_modrm_rm(ctx, 16, /*mem_only=*/true);
+        }
+        case OpSpec::Lx: {
+            auto imm = ctx.read_u8();
+            if (!imm) return std::unexpected(std::move(imm).error());
+            return Operand::make_reg(vector_reg(static_cast<u8>(*imm >> 4), ctx.vector_bytes));
         }
         case OpSpec::Hx: {
             return Operand::make_reg(vector_reg(ctx.vex_vvvv, ctx.vector_bytes));
@@ -389,13 +410,15 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
         }
         case OpSpec::Wx: {
             const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
+            const u8 bytes = ctx.widening_source ? static_cast<u8>(ctx.vector_bytes / 2)
+                                                 : ctx.vector_bytes;
             if (mod == 3) {
                 const u8 rm_ext =
                     static_cast<u8>((ctx.vex_b2 ? 16u : 0u) |
                                     (ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
-                return Operand::make_reg(vector_reg(rm_ext, ctx.vector_bytes));
+                return Operand::make_reg(vector_reg(rm_ext, std::max<u8>(bytes, 16)));
             }
-            return decode_modrm_rm(ctx, ctx.vector_bytes, /*mem_only=*/true);
+            return decode_modrm_rm(ctx, bytes, /*mem_only=*/true);
         }
         case OpSpec::Wss: {
             const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
@@ -406,7 +429,16 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
             }
             const unsigned scalar_size =
                 (ctx.vex || ctx.evex) && ctx.vex_map == 2 && ctx.rex_w ? 8u : 4u;
-            return decode_modrm_rm(ctx, scalar_size, /*mem_only=*/true);
+            return decode_modrm_rm(ctx, scalar_size * widened(ctx), /*mem_only=*/true);
+        }
+        case OpSpec::Wb: {
+            const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
+            if (mod == 3) {
+                const u8 rm_ext =
+                    static_cast<u8>((ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
+                return Operand::make_reg(vector_reg(rm_ext, 16));
+            }
+            return decode_modrm_rm(ctx, 1, /*mem_only=*/true);
         }
         case OpSpec::Ww: {
             const u8 mod = static_cast<u8>((ctx.modrm >> 6) & 3);
@@ -415,7 +447,7 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
                     static_cast<u8>((ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
                 return Operand::make_reg(vector_reg(rm_ext, 16));
             }
-            return decode_modrm_rm(ctx, 2, /*mem_only=*/true);
+            return decode_modrm_rm(ctx, 2u * widened(ctx), /*mem_only=*/true);
         }
         case OpSpec::RdMb:
         case OpSpec::RdMw: {
@@ -430,7 +462,7 @@ decode_operand(Context& ctx, OpSpec spec, addr_t insn_addr) noexcept {
                     static_cast<u8>((ctx.rex_b ? 8u : 0u) | (ctx.modrm & 7));
                 return Operand::make_reg(vector_reg(rm_ext, 16));
             }
-            return decode_modrm_rm(ctx, /*size=*/8, /*mem_only=*/true);
+            return decode_modrm_rm(ctx, 8u * widened(ctx), /*mem_only=*/true);
         }
     }
     return std::unexpected(Error::not_implemented("x64: unhandled operand spec"));

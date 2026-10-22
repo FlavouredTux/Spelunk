@@ -992,7 +992,15 @@ void Emitter::emit_merge_edge_assignments(addr_t block_start, std::string_view i
                 rendered = expand(*definition, 0);
             }
         }
-        if (rendered.empty()) rendered = expr(value);
+        if (rendered.empty()) {
+            rendered = expr(value);
+            const auto local = merge_locals.find(name);
+            const IrInst* producer = def_of(value);
+            if (local != merge_locals.end() && type_bits(local->second.type_value.type) >= 128 &&
+                producer && type_bits(producer->dst.type) >= 128) {
+                rendered = adapt_vector_lane(value, std::move(rendered));
+            }
+        }
         if (auto local = merge_locals.find(name); local != merge_locals.end()) {
             const std::string type = c_type_name_for(local->second.type_value);
             if (type.ends_with('*') && rendered.starts_with('&')) {

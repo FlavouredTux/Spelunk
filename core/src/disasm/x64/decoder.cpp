@@ -28,7 +28,10 @@ using x64_decode::kSecondary_F3;
 using x64_decode::kMap38;
 using x64_decode::kMap38_66;
 using x64_decode::kMap38_F2;
+using x64_decode::kMap38_F3;
 using x64_decode::kMap3A_66;
+using x64_decode::kVexMap3_66;
+using x64_decode::kVexMap3_F2;
 using x64_decode::kVexMap2;
 using x64_decode::kVexMap2_66;
 using x64_decode::kVexMap2_F2;
@@ -57,6 +60,99 @@ using x64_decode::parse_legacy_prefix;
     }
 }
 
+// VEX/EVEX add a non-destructive first source (vvvv) to every legacy SSE
+// operation that reads its destination. These do not read it: moves,
+// conversions, immediate-selector shuffles and the like keep two operands.
+[[nodiscard]] constexpr bool vex_unary(Mnemonic mnemonic) noexcept {
+    switch (mnemonic) {
+        case Mnemonic::Movups: case Mnemonic::Movaps: case Mnemonic::Movdqa:
+        case Mnemonic::Movdqu: case Mnemonic::Movd: case Mnemonic::MovqXmm:
+        case Mnemonic::Pshufd: case Mnemonic::Pshuflw: case Mnemonic::Pshufhw:
+        case Mnemonic::Cvtdq2ps: case Mnemonic::Cvtps2dq: case Mnemonic::Cvttps2dq:
+        case Mnemonic::Cvtdq2pd: case Mnemonic::Cvtpd2dq: case Mnemonic::Cvttpd2dq:
+        case Mnemonic::Cvtps2pd: case Mnemonic::Cvtpd2ps:
+        case Mnemonic::Sqrtps: case Mnemonic::Sqrtpd: case Mnemonic::Rcpps: case Mnemonic::Rsqrtps:
+        case Mnemonic::Pabsb: case Mnemonic::Pabsw: case Mnemonic::Pabsd:
+        case Mnemonic::Pmovsxbw: case Mnemonic::Pmovsxbd: case Mnemonic::Pmovsxbq:
+        case Mnemonic::Pmovsxwd: case Mnemonic::Pmovsxwq: case Mnemonic::Pmovsxdq:
+        case Mnemonic::Pmovzxbw: case Mnemonic::Pmovzxbd: case Mnemonic::Pmovzxbq:
+        case Mnemonic::Pmovzxwd: case Mnemonic::Pmovzxwq: case Mnemonic::Pmovzxdq:
+        case Mnemonic::Roundps: case Mnemonic::Roundpd: case Mnemonic::Ptest:
+        case Mnemonic::Movntdqa: case Mnemonic::Phminposuw: case Mnemonic::Aesimc:
+        case Mnemonic::Aeskeygenassist: case Mnemonic::Ucomiss: case Mnemonic::Ucomisd:
+        case Mnemonic::Comiss: case Mnemonic::Comisd: case Mnemonic::Movddup:
+        case Mnemonic::Movshdup: case Mnemonic::Movsldup: case Mnemonic::Lddqu:
+        case Mnemonic::Vtestps: case Mnemonic::Vtestpd: case Mnemonic::Vcvtph2ps:
+        case Mnemonic::Vbroadcastss: case Mnemonic::Vbroadcastsd:
+        case Mnemonic::Vbroadcastf128: case Mnemonic::Vbroadcasti128:
+        case Mnemonic::Vpbroadcastb: case Mnemonic::Vpbroadcastw:
+        case Mnemonic::Vpbroadcastd: case Mnemonic::Vpbroadcastq:
+        case Mnemonic::Vpermq: case Mnemonic::Vpermpd:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] constexpr bool vex_takes_vvvv(const OpcodeEntry& entry) noexcept {
+    if (entry.op1 != OpSpec::Vx || entry.op2 == OpSpec::Hx) return false;
+    switch (entry.op2) {
+        case OpSpec::Wx: case OpSpec::Wss: case OpSpec::Wsd: case OpSpec::Ww:
+        case OpSpec::Wb: case OpSpec::Wdq: case OpSpec::Ev: case OpSpec::Ed: case OpSpec::Edq:
+        case OpSpec::RdMb:
+            break;
+        default:
+            return false;
+    }
+    // vpermilps/pd: the immediate form is unary, the vector form has vvvv.
+    if ((entry.mnemonic == Mnemonic::Vpermilps || entry.mnemonic == Mnemonic::Vpermilpd) &&
+        entry.op3 == OpSpec::Ib) return false;
+    return !vex_unary(entry.mnemonic);
+}
+
+// VEX.256 forms whose source is half the width of the destination, and the
+// ones whose destination is half the width of the source.
+[[nodiscard]] constexpr bool vex_widening(Mnemonic mnemonic) noexcept {
+    switch (mnemonic) {
+        case Mnemonic::Cvtdq2pd: case Mnemonic::Cvtps2pd: case Mnemonic::Vcvtph2ps:
+        case Mnemonic::Vcvtps2ph:
+        case Mnemonic::Pmovsxbw: case Mnemonic::Pmovsxbd: case Mnemonic::Pmovsxbq:
+        case Mnemonic::Pmovsxwd: case Mnemonic::Pmovsxwq: case Mnemonic::Pmovsxdq:
+        case Mnemonic::Pmovzxbw: case Mnemonic::Pmovzxbd: case Mnemonic::Pmovzxbq:
+        case Mnemonic::Pmovzxwd: case Mnemonic::Pmovzxwq: case Mnemonic::Pmovzxdq:
+            return true;
+        default:
+            return false;
+    }
+}
+
+[[nodiscard]] constexpr bool vex_narrowing(Mnemonic mnemonic) noexcept {
+    return mnemonic == Mnemonic::Cvtpd2ps || mnemonic == Mnemonic::Cvtpd2dq ||
+           mnemonic == Mnemonic::Cvttpd2dq;
+}
+
+// VEX.W selects the doubleword / quadword or single / double variant.
+[[nodiscard]] Mnemonic vex_w_variant(Mnemonic mnemonic) noexcept {
+    switch (mnemonic) {
+        case Mnemonic::Vpsllvd: return Mnemonic::Vpsllvq;
+        case Mnemonic::Vpsrlvd: return Mnemonic::Vpsrlvq;
+        case Mnemonic::Vmaskmovps: return mnemonic;
+        case Mnemonic::Vpmaskmovd: return Mnemonic::Vpmaskmovq;
+        case Mnemonic::VpmaskmovdStore: return Mnemonic::VpmaskmovqStore;
+        default: break;
+    }
+    // The FMA family: ps -> pd, ss -> sd (declared in that order).
+    const auto value = static_cast<unsigned>(mnemonic);
+    if (value >= static_cast<unsigned>(Mnemonic::Vfmadd132ps) &&
+        value <= static_cast<unsigned>(Mnemonic::Vfmsubadd231pd)) {
+        const std::string_view name = mnemonic_name(mnemonic);
+        if (name.ends_with("ps") || name.ends_with("ss")) {
+            return static_cast<Mnemonic>(value + 1);
+        }
+    }
+    return mnemonic;
+}
+
 void promote_size_sensitive_mnemonics(const Context& ctx, Instruction& insn) noexcept {
     if (insn.mnemonic == Mnemonic::Cwde && ctx.opsize() == 8) {
         insn.mnemonic = Mnemonic::Cdqe;
@@ -71,17 +167,7 @@ void promote_size_sensitive_mnemonics(const Context& ctx, Instruction& insn) noe
     } else if (insn.mnemonic == Mnemonic::Pinsrd && ctx.rex_w) {
         insn.mnemonic = Mnemonic::Pinsrq;
     }
-    if (ctx.rex_w) {
-        switch (insn.mnemonic) {
-            case Mnemonic::Vfmadd132ps: insn.mnemonic = Mnemonic::Vfmadd132pd; break;
-            case Mnemonic::Vfmadd132ss: insn.mnemonic = Mnemonic::Vfmadd132sd; break;
-            case Mnemonic::Vfmadd213ps: insn.mnemonic = Mnemonic::Vfmadd213pd; break;
-            case Mnemonic::Vfmadd213ss: insn.mnemonic = Mnemonic::Vfmadd213sd; break;
-            case Mnemonic::Vfmadd231ps: insn.mnemonic = Mnemonic::Vfmadd231pd; break;
-            case Mnemonic::Vfmadd231ss: insn.mnemonic = Mnemonic::Vfmadd231sd; break;
-            default: break;
-        }
-    }
+    if ((ctx.vex || ctx.evex) && ctx.rex_w) insn.mnemonic = vex_w_variant(insn.mnemonic);
     // 64-bit promotion for the default-sized string ops (REX.W).
     if (ctx.opsize() == 8) {
         switch (insn.mnemonic) {
@@ -92,57 +178,6 @@ void promote_size_sensitive_mnemonics(const Context& ctx, Instruction& insn) noe
             case Mnemonic::Scasd: insn.mnemonic = Mnemonic::Scasq; break;
             default: break;
         }
-    }
-}
-
-[[nodiscard]] constexpr bool vex_has_nondestructive_source(Mnemonic mnemonic) noexcept {
-    switch (mnemonic) {
-        case Mnemonic::Addss: case Mnemonic::Subss:
-        case Mnemonic::Mulss: case Mnemonic::Divss:
-        case Mnemonic::Addsd: case Mnemonic::Subsd:
-        case Mnemonic::Mulsd: case Mnemonic::Divsd:
-        case Mnemonic::Minss: case Mnemonic::Maxss:
-        case Mnemonic::Minsd: case Mnemonic::Maxsd:
-        case Mnemonic::Sqrtss: case Mnemonic::Sqrtsd:
-        case Mnemonic::Cvtsi2ss: case Mnemonic::Cvtsi2sd:
-        case Mnemonic::Cvtss2sd: case Mnemonic::Cvtsd2ss:
-        case Mnemonic::Andps: case Mnemonic::Andnps:
-        case Mnemonic::Orps: case Mnemonic::Xorps:
-        case Mnemonic::Addps: case Mnemonic::Mulps:
-        case Mnemonic::Subps: case Mnemonic::Divps:
-        case Mnemonic::Minps: case Mnemonic::Maxps:
-        case Mnemonic::Andpd: case Mnemonic::Andnpd:
-        case Mnemonic::Orpd: case Mnemonic::Xorpd:
-        case Mnemonic::Addpd: case Mnemonic::Mulpd:
-        case Mnemonic::Subpd: case Mnemonic::Divpd:
-        case Mnemonic::Minpd: case Mnemonic::Maxpd:
-        case Mnemonic::Pxor: case Mnemonic::Pand:
-        case Mnemonic::Pandn: case Mnemonic::Por:
-        case Mnemonic::Pcmpeqb: case Mnemonic::Pcmpeqw:
-        case Mnemonic::Pcmpeqd: case Mnemonic::Pcmpgtb:
-        case Mnemonic::Pcmpgtw: case Mnemonic::Pcmpgtd:
-        case Mnemonic::Paddb: case Mnemonic::Paddw:
-        case Mnemonic::Paddd: case Mnemonic::Paddq:
-        case Mnemonic::Psubb: case Mnemonic::Psubw:
-        case Mnemonic::Psubd: case Mnemonic::Psubq:
-        case Mnemonic::Pmullw: case Mnemonic::Pmulhw:
-        case Mnemonic::Pmulhuw: case Mnemonic::Pmuludq:
-        case Mnemonic::Pmaddwd: case Mnemonic::Pminub:
-        case Mnemonic::Pmaxub: case Mnemonic::Pminsw:
-        case Mnemonic::Pmaxsw: case Mnemonic::Pavgb:
-        case Mnemonic::Pavgw: case Mnemonic::Psubusb:
-        case Mnemonic::Psubusw: case Mnemonic::Paddusb:
-        case Mnemonic::Paddusw: case Mnemonic::Psubsb:
-        case Mnemonic::Psubsw: case Mnemonic::Paddsb:
-        case Mnemonic::Paddsw: case Mnemonic::Punpcklbw:
-        case Mnemonic::Punpcklwd: case Mnemonic::Punpckldq:
-        case Mnemonic::Punpcklqdq: case Mnemonic::Punpckhbw:
-        case Mnemonic::Punpckhwd: case Mnemonic::Punpckhdq:
-        case Mnemonic::Punpckhqdq: case Mnemonic::Shufps:
-        case Mnemonic::Shufpd:
-            return true;
-        default:
-            return false;
     }
 }
 
@@ -256,7 +291,18 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
     OpcodeEntry legacy_entry;
     if (ctx.vex || ctx.evex) {
         if (ctx.vex_map == 1 && opcode == 0x77 && ctx.vex_pp == 0) {
-            entry = &kVzeroupper;
+            legacy_entry = kVzeroupper;
+            if (ctx.vector_bytes == 32) legacy_entry.mnemonic = Mnemonic::Vzeroall;
+            entry = &legacy_entry;
+        } else if (ctx.vex_map == 1 && opcode == 0xAE && ctx.vex_pp == 0 && !ctx.eof()) {
+            // vldmxcsr / vstmxcsr, the only VEX members of group 15.
+            const u8 reg = static_cast<u8>((static_cast<u8>(ctx.code[ctx.pos]) >> 3) & 7);
+            legacy_entry = OpcodeEntry{};
+            legacy_entry.modrm = true;
+            legacy_entry.op1 = OpSpec::M;
+            legacy_entry.mnemonic = reg == 2 ? Mnemonic::Ldmxcsr
+                : (reg == 3 ? Mnemonic::Stmxcsr : Mnemonic::Invalid);
+            entry = &legacy_entry;
         } else if (ctx.vex_map == 1) {
             switch (ctx.vex_pp) {
                 case 0: entry = &kSecondary[opcode]; break;
@@ -268,10 +314,22 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         } else if (ctx.vex_map == 2) {
             switch (ctx.vex_pp) {
                 case 0: entry = &kVexMap2[opcode]; break;
-                case 1: entry = &kVexMap2_66[opcode]; break;
+                case 1:
+                    // VEX-only entries first, then the legacy 66 0F 38 op
+                    // with a vvvv source.
+                    entry = has_entry(kVexMap2_66[opcode]) ? &kVexMap2_66[opcode]
+                                                            : &kMap38_66[opcode];
+                    break;
                 case 2: entry = &kVexMap2_F3[opcode]; break;
                 case 3: entry = &kVexMap2_F2[opcode]; break;
                 default: break;
+            }
+        } else if (ctx.vex_map == 3) {
+            if (ctx.vex_pp == 1) {
+                entry = has_entry(kVexMap3_66[opcode]) ? &kVexMap3_66[opcode]
+                                                        : &kMap3A_66[opcode];
+            } else if (ctx.vex_pp == 3) {
+                entry = &kVexMap3_F2[opcode];
             }
         } else {
             return std::unexpected(Error::not_implemented(std::format(
@@ -313,6 +371,9 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             if (escape == 0x38 && ctx.prefix.repne && has_entry(kMap38_F2[opcode])) {
                 entry = &kMap38_F2[opcode];
                 ctx.prefix.repne = false;
+            } else if (escape == 0x38 && ctx.prefix.rep && has_entry(kMap38_F3[opcode])) {
+                entry = &kMap38_F3[opcode];
+                ctx.prefix.rep = false;
             } else if (ctx.prefix.opsize &&
                        has_entry(escape == 0x38 ? kMap38_66[opcode] : kMap3A_66[opcode])) {
                 entry = escape == 0x38 ? &kMap38_66[opcode] : &kMap3A_66[opcode];
@@ -325,6 +386,32 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                 return std::unexpected(Error::not_implemented(std::format(
                     "x64: unsupported opcode 0f {:02x} {:#04x} at {:#x}", escape, opcode, addr)));
             }
+        }
+        // Single register-form encodings of groups 7 and 9 and CET's RDSSP.
+        else if ((opcode == 0x01 || opcode == 0xC7 || (opcode == 0x1E && ctx.prefix.rep)) &&
+                 !ctx.eof()) {
+            const u8 modrm = static_cast<u8>(ctx.code[ctx.pos]);
+            const u8 reg = static_cast<u8>((modrm >> 3) & 7);
+            const bool register_form = (modrm >> 6) == 3;
+            legacy_entry = OpcodeEntry{};
+            legacy_entry.modrm = true;
+            if (opcode == 0x01) {
+                legacy_entry.mnemonic = modrm == 0xD0 ? Mnemonic::Xgetbv
+                    : (modrm == 0xF9 ? Mnemonic::Rdtscp : Mnemonic::Invalid);
+            } else if (opcode == 0xC7) {
+                if (register_form && (reg == 6 || reg == 7)) {
+                    legacy_entry.mnemonic = reg == 6 ? Mnemonic::Rdrand : Mnemonic::Rdseed;
+                    legacy_entry.op1 = OpSpec::Ev;
+                } else if (!register_form && reg == 1) {
+                    legacy_entry.mnemonic = Mnemonic::Cmpxchg16b;
+                    legacy_entry.op1 = OpSpec::M;
+                }
+            } else if (register_form && reg == 1) {
+                legacy_entry.mnemonic = Mnemonic::Rdssp;
+                legacy_entry.op1 = OpSpec::Ev;
+                ctx.prefix.rep = false;
+            }
+            entry = &legacy_entry;
         }
         // Group 15 splits on ModR/M.mod: fences in the register form,
         // MXCSR / FXSAVE / XSAVE / CLFLUSH with memory.
@@ -376,7 +463,11 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         if (opcode >= 0xD8 && opcode <= 0xDF) {
             return decode_x87_escape(ctx, addr);
         }
-        entry = &kPrimary[opcode];
+        if (opcode == 0x9B) {
+            legacy_entry.mnemonic = Mnemonic::Fwait;
+            entry = &legacy_entry;
+        }
+        if (!entry) entry = &kPrimary[opcode];
         if (!ctx.mode64 && opcode >= 0x40 && opcode <= 0x4f) {
             legacy_entry.mnemonic = opcode < 0x48 ? Mnemonic::Inc : Mnemonic::Dec;
             legacy_entry.op1 = OpSpec::Zv;
@@ -391,7 +482,9 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
             "x64: unsupported opcode {:#04x} at {:#x}", opcode, addr)));
     }
     if ((ctx.vex || ctx.evex) && ctx.vex_map == 1 &&
-        entry->group == 0 && entry->mnemonic != Mnemonic::Vzeroupper) {
+        entry->group == 0 && entry->mnemonic != Mnemonic::Vzeroupper &&
+        entry->mnemonic != Mnemonic::Vzeroall && entry->mnemonic != Mnemonic::Ldmxcsr &&
+        entry->mnemonic != Mnemonic::Stmxcsr) {
         const auto vector_spec = [](OpSpec spec) {
             return spec == OpSpec::Vx || spec == OpSpec::Hx ||
                    spec == OpSpec::Wx || spec == OpSpec::Wss ||
@@ -405,22 +498,9 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         }
     }
 
-    OpcodeEntry vector_entry;
     if ((ctx.vex || ctx.evex) && entry->mnemonic == Mnemonic::Cmpss) {
         return std::unexpected(Error::not_implemented(std::format(
             "x64: unsupported vector-prefix form of cmpss at {:#x}", addr)));
-    }
-    if ((ctx.vex || ctx.evex) && vex_has_nondestructive_source(entry->mnemonic)) {
-        vector_entry = *entry;
-        if (entry->op3 == OpSpec::None) {
-            vector_entry.op3 = entry->op2;
-            vector_entry.op2 = OpSpec::Hx;
-        } else {
-            vector_entry.op4 = entry->op3;
-            vector_entry.op3 = entry->op2;
-            vector_entry.op2 = OpSpec::Hx;
-        }
-        entry = &vector_entry;
     }
 
     if (entry->modrm) {
@@ -437,6 +517,48 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                 "x64: reserved group entry (opcode {:#04x}, /{}) at {:#x}",
                 ctx.opcode, reg, addr)));
         }
+    }
+
+    OpcodeEntry vector_entry;
+    if (ctx.vex || ctx.evex) {
+        const bool register_form = (ctx.modrm >> 6) == 3;
+        vector_entry = *entry;
+        const Mnemonic mnemonic = entry->mnemonic;
+        if (mnemonic == Mnemonic::Psllw || mnemonic == Mnemonic::Pslld ||
+            mnemonic == Mnemonic::Psllq || mnemonic == Mnemonic::Pslldq ||
+            mnemonic == Mnemonic::Psrlw || mnemonic == Mnemonic::Psrld ||
+            mnemonic == Mnemonic::Psrlq || mnemonic == Mnemonic::Psrldq ||
+            mnemonic == Mnemonic::Psraw || mnemonic == Mnemonic::Psrad) {
+            // Immediate shifts write vvvv from r/m: `vpsllq ymm0, ymm1, 3`.
+            if (entry->op1 == OpSpec::Wx && entry->op2 == OpSpec::Ib) {
+                vector_entry.op1 = OpSpec::Hx;
+                vector_entry.op2 = OpSpec::Wx;
+                vector_entry.op3 = OpSpec::Ib;
+            } else {
+                // The xmm-count forms take a 128-bit count.
+                vector_entry.op1 = OpSpec::Vx;
+                vector_entry.op2 = OpSpec::Hx;
+                vector_entry.op3 = OpSpec::Wdq;
+            }
+        } else if (mnemonic == Mnemonic::MovssLoad || mnemonic == Mnemonic::MovsdXmm) {
+            // Register form merges vvvv's upper lanes; the load has none.
+            if (register_form) {
+                vector_entry.op2 = OpSpec::Hx;
+                vector_entry.op3 = entry->op2;
+            }
+        } else if (mnemonic == Mnemonic::MovssStore || mnemonic == Mnemonic::MovsdXmmStore) {
+            if (register_form) {
+                vector_entry.op2 = OpSpec::Hx;
+                vector_entry.op3 = entry->op2;
+            }
+        } else if (vex_takes_vvvv(*entry)) {
+            vector_entry.op4 = entry->op3;
+            vector_entry.op3 = entry->op2;
+            vector_entry.op2 = OpSpec::Hx;
+        }
+        entry = &vector_entry;
+        ctx.widening_source = vex_widening(mnemonic);
+        ctx.narrowing_destination = vex_narrowing(mnemonic) && ctx.vector_bytes == 32;
     }
 
     Instruction insn;
@@ -462,7 +584,14 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
         insn.num_operands = static_cast<u8>(i + 1);
     }
 
-    promote_size_sensitive_mnemonics(ctx, insn);
+    // FMA4: VEX.W1 moves the memory operand from the third to the fourth slot.
+    if (ctx.vex && ctx.rex_w && insn.num_operands == 4 &&
+        static_cast<unsigned>(insn.mnemonic) >= static_cast<unsigned>(Mnemonic::Fma4Fmaddsubps) &&
+        static_cast<unsigned>(insn.mnemonic) <= static_cast<unsigned>(Mnemonic::Fma4Fnmsubsd)) {
+        std::swap(insn.operands[2], insn.operands[3]);
+    } else {
+        promote_size_sensitive_mnemonics(ctx, insn);
+    }
 
     insn.length = static_cast<u8>(ctx.pos);
     std::memcpy(insn.raw_bytes.data(), code.data(),

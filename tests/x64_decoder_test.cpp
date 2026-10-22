@@ -403,12 +403,16 @@ void test_x64_fp_call_lanes_and_vex_lift() {
         std::byte{0xC4}, std::byte{0xE2}, std::byte{0x75},
         std::byte{0x98}, std::byte{0xC2}};
     ir = lift_one(fma);
+    // vfmadd132ps ymm0, ymm1, ymm2 computes ymm0 * ymm2 + ymm1.
     bool saw_fma = false;
     for (const auto& instruction : ir.blocks[0].insts) {
         saw_fma |= instruction.op == spelunk::IrOp::Intrinsic &&
-            instruction.name == "_mm256_fmadd132ps" &&
+            instruction.name == "_mm256_fmadd_ps" &&
             instruction.dst.type == spelunk::IrType::I256 &&
-            instruction.src_count == 3;
+            instruction.src_count == 3 &&
+            instruction.srcs[0].reg == spelunk::Reg::Ymm0 &&
+            instruction.srcs[1].reg == spelunk::Reg::Ymm2 &&
+            instruction.srcs[2].reg == spelunk::Reg::Ymm1;
     }
     check_eq(saw_fma, true, "FMA3 operand ordering remains explicit in IR");
 }

@@ -672,4 +672,20 @@ void lift_adc_sbb(LiftCtx& ctx, bool subtract) {
     store_lvalue(insn.operands[0], r, ctx);
 }
 
+// ADCX / ADOX: add with carry through CF (adcx) or OF (adox) alone; every
+// other flag is left untouched, which lets two carry chains interleave.
+void lift_adx(LiftCtx& ctx, Flag chain) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    IrValue a = materialize_rvalue(insn.operands[0], ctx);
+    IrValue b = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), a.type, /*sign_ext=*/false);
+    const IrValue carry_in = ctx.emit_convert(IrOp::ZExt, ctx.flag_val(chain), a.type);
+    const IrValue mid = ctx.emit_binop(IrOp::Add, a, b);
+    const IrValue r = ctx.emit_binop(IrOp::Add, mid, carry_in);
+    ctx.emit_set_flag(chain, ctx.emit_binop_i1(IrOp::Or,
+        ctx.emit_binop_i1(IrOp::AddCarry, a, b),
+        ctx.emit_binop_i1(IrOp::AddCarry, mid, carry_in)));
+    store_lvalue(insn.operands[0], r, ctx);
+}
+
 }  // namespace spelunk::x64_lift

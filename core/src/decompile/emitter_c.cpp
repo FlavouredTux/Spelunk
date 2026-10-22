@@ -567,10 +567,18 @@ std::string Emitter::adapt_vector_lane(const IrValue& use, std::string rendered)
     // wrote: scalar loads (movss/movsd/movd/movq) zero the upper lanes, and
     // scalar reads take lane 0.
     const IrInst* definition = def_of(use);
-    if (!definition || definition->op == IrOp::Clobber || definition->op == IrOp::Phi ||
+    if (!definition || definition->op == IrOp::Clobber ||
         definition->op == IrOp::Call || definition->op == IrOp::CallIndirect) return rendered;
     const IrType written = definition->dst.type;
     if (written == use.type) return rendered;
+    // A merge between vector widths takes the widest; its narrower readers
+    // take the low half. Scalar merges already render as the scalar.
+    if (definition->op == IrOp::Phi) {
+        if (type_bits(written) == 256 && type_bits(use.type) == 128) {
+            return std::format("_mm256_castsi256_si128({})", rendered);
+        }
+        return rendered;
+    }
     // Only a real vector producer has lanes to pick from; call results and
     // scalar-lane merges already render as the scalar.
     const IrInst* producer = definition;
@@ -581,6 +589,14 @@ std::string Emitter::adapt_vector_lane(const IrValue& use, std::string rendered)
     }
     const bool vector_producer = producer->op == IrOp::Load ||
         (producer->op == IrOp::Intrinsic && producer->name.starts_with("_mm"));
+    // YMM and XMM share a register: the low half, or a VEX.128 write's
+    // zeroed upper half.
+    if (type_bits(use.type) == 128 && type_bits(written) == 256 && vector_producer) {
+        return std::format("_mm256_castsi256_si128({})", rendered);
+    }
+    if (type_bits(use.type) == 256 && type_bits(written) == 128) {
+        return std::format("_mm256_zextsi128_si256({})", rendered);
+    }
     if (type_bits(use.type) == 128 && type_bits(written) < 128) {
         switch (written) {
             case IrType::F32: return std::format("_mm_castps_si128(_mm_set_ss({}))", rendered);
@@ -638,8 +654,13 @@ std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const 
     for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
         if (i > 0) args += ", ";
         std::string rendered = expr(inst.srcs[i], depth, 0);
-        if (!options.c_source && inst.name.starts_with("_mm_")) {
+        if (!options.c_source && inst.name.starts_with("_mm")) {
             rendered = adapt_vector_lane(inst.srcs[i], std::move(rendered));
+            // Masked moves take their address as a pointer.
+            if (i == 0 && (inst.name.find("_maskload_") != std::string::npos ||
+                           inst.name.find("_maskstore_") != std::string::npos)) {
+                rendered = std::format("(void*)({})", rendered);
+            }
         }
         if (options.c_source && (scalar_compare || packed_logic)) {
             rendered = scalar_compare && i == 1

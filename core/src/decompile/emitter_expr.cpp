@@ -136,9 +136,17 @@ Emitter::unaligned_vector_access(const IrValue& addr, IrType type, Reg segment) 
                                                                   : "_mm256_loadu_si256",
                            unaligned->first);
     }
+    // A constant in read-only data renders as its value; its raw address
+    // means nothing outside the binary.
     if (binary && d.segment == Reg::None &&
-        (d.dst.type == IrType::F32 || d.dst.type == IrType::F64)) {
-        if (auto address = try_resolve_imm_addr(d.srcs[0])) {
+        (d.dst.type == IrType::F32 || d.dst.type == IrType::F64 ||
+         d.dst.type == IrType::I8 || d.dst.type == IrType::I16 ||
+         d.dst.type == IrType::I32 || d.dst.type == IrType::I64)) {
+        auto address = try_resolve_imm_addr(d.srcs[0]);
+        // Bytes of a string read as the string they belong to.
+        if (address && type_bits(d.dst.type) <= 16 &&
+            string_literals.try_c_string_at(static_cast<u64>(*address))) address.reset();
+        if (address) {
             const addr_t va = static_cast<addr_t>(*address);
             for (const auto& section : binary->sections()) {
                 const std::size_t width = type_bits(d.dst.type) / 8;
@@ -147,33 +155,37 @@ Emitter::unaligned_vector_access(const IrValue& addr, IrType type, Reg segment) 
                     width > section.size - (va - section.vaddr)) continue;
                 const auto bytes = binary->bytes_at(va);
                 if (bytes.size() < width) break;
-                const u64 bits = width == 4
-                    ? (binary->endian() == Endian::Little ? read_le_at<u32>(bytes.data()) : read_be_at<u32>(bytes.data()))
-                    : (binary->endian() == Endian::Little ? read_le_at<u64>(bytes.data()) : read_be_at<u64>(bytes.data()));
+                const bool little = binary->endian() == Endian::Little;
+                const u64 bits = width == 1 ? std::to_integer<u64>(bytes[0])
+                    : width == 2 ? (little ? read_le_at<u16>(bytes.data()) : read_be_at<u16>(bytes.data()))
+                    : width == 4 ? (little ? read_le_at<u32>(bytes.data()) : read_be_at<u32>(bytes.data()))
+                    : (little ? read_le_at<u64>(bytes.data()) : read_be_at<u64>(bytes.data()));
                 return format_numeric_imm(IrValue::make_imm(static_cast<i64>(bits), d.dst.type));
             }
         }
     }
     const std::string refined = c_type_name_for(d.dst);
-    // A vector constant from read-only data renders as its value; its raw
-    // address means nothing outside the binary.
+    // Vector constants likewise.
     if (binary && d.segment == Reg::None &&
         (abi == Abi::SysVAmd64 || abi == Abi::Win64) &&
-        d.dst.type == IrType::I128 && binary->endian() == Endian::Little) {
+        (d.dst.type == IrType::I128 || d.dst.type == IrType::I256) &&
+        binary->endian() == Endian::Little) {
+        const std::size_t size = type_bits(d.dst.type) / 8;
         if (auto address = try_resolve_imm_addr(d.srcs[0])) {
             const auto va = static_cast<addr_t>(*address);
             for (const auto& section : binary->sections()) {
                 if (!section.flags.readable || section.flags.writable || section.flags.executable || va < section.vaddr ||
-                    va - section.vaddr > section.size || 16 > section.size - (va - section.vaddr)) continue;
+                    va - section.vaddr > section.size || size > section.size - (va - section.vaddr)) continue;
                 const auto bytes = binary->bytes_at(va);
-                if (bytes.size() < 16) break;
-                const u64 high = read_le_at<u64>(bytes.data() + 8);
-                const u64 low = read_le_at<u64>(bytes.data());
-                if (options.c_source) {
-                    return std::format("_mm_set_epi64x((int64_t)UINT64_C({:#x}), (int64_t)UINT64_C({:#x}))",
-                                       high, low);
+                if (bytes.size() < size) break;
+                std::string lanes;
+                for (std::size_t lane = size / 8; lane-- > 0;) {
+                    const u64 value = read_le_at<u64>(bytes.data() + lane * 8);
+                    if (!lanes.empty()) lanes += ", ";
+                    lanes += options.c_source ? std::format("(int64_t)UINT64_C({:#x})", value)
+                                              : std::format("{:#x}", value);
                 }
-                return std::format("_mm_set_epi64x({:#x}, {:#x})", high, low);
+                return std::format("{}({})", size == 32 ? "_mm256_set_epi64x" : "_mm_set_epi64x", lanes);
             }
         }
     }
@@ -654,7 +666,8 @@ std::string Emitter::format_store(const IrInst& inst) const {
         return std::format("spelunk_write_{}({}, {});", c_memory_suffix(val.type), c_address(addr), value);
     }
     if (auto unaligned = unaligned_vector_access(addr, val.type, inst.segment)) {
-        return std::format("{}({}, {});", unaligned->second, unaligned->first, expr(val));
+        return std::format("{}({}, {});", unaligned->second, unaligned->first,
+                           adapt_vector_lane(val, expr(val)));
     }
     std::string lhs;
     if (inst.segment == Reg::None) {

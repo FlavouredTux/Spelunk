@@ -189,7 +189,8 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
     // constants keeps a stale entry value out of the dataflow.
     const Operand& left_op = insn.operands[unary_shuffle || nondestructive ? 1 : 0];
     const Operand& right_op = insn.operands[nondestructive ? 2 : 1];
-    if (!unary_shuffle && t == IrType::I128 && !(insn.x86_evex && insn.x86_mask != 0) &&
+    if (!unary_shuffle && (t == IrType::I128 || t == IrType::I256) &&
+        !(insn.x86_evex && insn.x86_mask != 0) &&
         left_op.kind == Operand::Kind::Register && right_op.kind == Operand::Kind::Register &&
         left_op.reg == right_op.reg) {
         const bool zero = name == "_mm_xor_si128" || name == "_mm_xor_ps" || name == "_mm_xor_pd" ||
@@ -199,7 +200,7 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
         if (zero || ones) {
             IrInst constant;
             constant.op = IrOp::Intrinsic;
-            constant.name = zero ? "_mm_setzero_si128" : "_mm_set1_epi32";
+            constant.name = vector_name(zero ? "_mm_setzero_si128" : "_mm_set1_epi32", t);
             constant.dst = ctx.temp(t);
             if (ones) constant.srcs[constant.src_count++] = ctx.imm(-1, IrType::I32);
             const IrValue result = constant.dst;
@@ -209,17 +210,16 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
         }
     }
     IrValue a = read_xmm(ctx, left_op, t);
-    IrValue b = unary_shuffle ? IrValue{} : read_xmm(ctx, right_op, t);
+    // `_mm256_sll_epi32(v, count)` takes its count as an __m128i.
+    const bool count_operand = name.starts_with("_mm_sll_") || name.starts_with("_mm_srl_") ||
+                               name.starts_with("_mm_sra_");
+    IrValue b = unary_shuffle ? IrValue{}
+        : read_xmm(ctx, right_op, count_operand ? IrType::I128 : t);
     if (a.kind == IrValueKind::None || (!unary_shuffle && b.kind == IrValueKind::None)) return;
 
     IrInst i;
     i.op   = IrOp::Intrinsic;
-    i.name = std::string(name);
-    if (t == IrType::I256 && i.name.starts_with("_mm_")) {
-        i.name.replace(0, 4, "_mm256_");
-    } else if (t == IrType::I512 && i.name.starts_with("_mm_")) {
-        i.name.replace(0, 4, "_mm512_");
-    }
+    i.name = vector_name(name, t);
     if (insn.x86_evex && insn.x86_mask != 0) {
         i.name = std::format("avx512.{}.{}",
             insn.x86_zeroing ? "maskz" : "mask", i.name);
@@ -254,15 +254,18 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
 // back to operand[0].
 void lift_simd_shift_imm(LiftCtx& ctx, std::string_view name, IrType t) {
     const auto& insn = *ctx.insn;
+    // Legacy `psllq xmm, imm`; VEX `vpsllq dst(vvvv), src, imm`.
+    const std::size_t source = insn.num_operands == 3 ? 1 : 0;
     if (insn.num_operands < 2) return;
-    if (insn.operands[1].kind != Operand::Kind::Immediate) return;
-    IrValue a = read_xmm(ctx, insn.operands[0], t);
+    if (insn.operands[source + 1].kind != Operand::Kind::Immediate) return;
+    if (t == IrType::I128) t = vector_type(insn);
+    IrValue a = read_xmm(ctx, insn.operands[source], t);
     if (a.kind == IrValueKind::None) return;
-    const Imm& im = insn.operands[1].imm;
+    const Imm& im = insn.operands[source + 1].imm;
 
     IrInst i;
     i.op   = IrOp::Intrinsic;
-    i.name = std::string(name);
+    i.name = vector_name(name, t);
     i.dst  = ctx.temp(t);
     i.srcs[0]   = a;
     i.srcs[1]   = ctx.imm(im.value, type_for_bits(im.size * 8));
@@ -345,32 +348,61 @@ void lift_simd_mov(LiftCtx& ctx, IrType t, bool storing) {
     write_xmm(ctx, insn.operands[0], v, t);
 }
 
-void lift_simd_unop(LiftCtx& ctx, std::string_view name) {
+IrType vector_type(const Instruction& insn) noexcept {
+    if (!insn.x86_vex && !insn.x86_evex) return IrType::I128;
+    return insn.x86_vector_bits == 3 ? IrType::I512
+        : (insn.x86_vector_bits == 2 ? IrType::I256 : IrType::I128);
+}
+
+std::string vector_name(std::string_view name, IrType type) {
+    std::string result(name);
+    if (!result.starts_with("_mm_") || (type != IrType::I256 && type != IrType::I512)) return result;
+    const bool wide = type == IrType::I512;
+    result.replace(0, 4, wide ? "_mm512_" : "_mm256_");
+    // Whole-register integer ops name the register width: `_mm256_and_si256`.
+    if (result.ends_with("_si128")) {
+        result.replace(result.size() - 3, 3, wide ? "512" : "256");
+    }
+    return result;
+}
+
+void lift_simd_unop(LiftCtx& ctx, std::string_view name, VectorShape shape) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands < 2) return;
+    const IrType width = vector_type(insn);
+    const IrType source_type = shape == VectorShape::Widening ? IrType::I128 : width;
+    const IrType result_type = shape == VectorShape::Narrowing ? IrType::I128 : width;
     const Operand& source = insn.operands[1];
     IrValue src;
-    if (source.kind == Operand::Kind::Memory && source.mem.size != 0 && source.mem.size < 16) {
+    if (source.kind == Operand::Kind::Memory && source.mem.size != 0 && source.mem.size < 16 &&
+        source.mem.size * 8u < type_bits(source_type)) {
         // Only the low lanes are read; widen them into a vector value.
-        const IrType narrow = type_for_bits(source.mem.size * 8u);
+        // A float broadcast loads the float itself, so a constant renders as
+        // its value.
+        const bool float_lane = (name.ends_with("broadcastss_ps") && source.mem.size == 4) ||
+                                (name.ends_with("broadcastsd_pd") && source.mem.size == 8);
+        const IrType narrow = float_lane ? (source.mem.size == 4 ? IrType::F32 : IrType::F64)
+                                         : type_for_bits(source.mem.size * 8u);
         IrValue loaded = ctx.emit_load(compute_ea(source.mem, ctx), narrow, source.mem.segment);
         IrInst widen;
         widen.op = IrOp::Intrinsic;
-        widen.name = narrow == IrType::I64 ? "_mm_cvtsi64_si128" : "_mm_cvtsi32_si128";
+        widen.name = narrow == IrType::F32 ? "_mm_set_ss"
+            : (narrow == IrType::F64 ? "_mm_set_sd"
+            : (narrow == IrType::I64 ? "_mm_cvtsi64_si128" : "_mm_cvtsi32_si128"));
         widen.dst = ctx.temp(IrType::I128);
-        widen.srcs[0] = narrow == IrType::I64 ? loaded
+        widen.srcs[0] = narrow == IrType::I64 || float_lane ? loaded
             : ctx.match_size(loaded, IrType::I32, /*sign_ext=*/false);
         widen.src_count = 1;
         src = widen.dst;
         ctx.emit(std::move(widen));
     } else {
-        src = read_xmm(ctx, source, IrType::I128);
+        src = read_xmm(ctx, source, source_type);
     }
     if (src.kind == IrValueKind::None) return;
     IrInst i;
     i.op = IrOp::Intrinsic;
-    i.name = std::string(name);
-    i.dst = ctx.temp(IrType::I128);
+    i.name = vector_name(name, width);
+    i.dst = ctx.temp(result_type);
     i.srcs[0] = src;
     i.src_count = 1;
     if (insn.num_operands > 2 && insn.operands[2].kind == Operand::Kind::Immediate) {
@@ -378,17 +410,19 @@ void lift_simd_unop(LiftCtx& ctx, std::string_view name) {
     }
     const IrValue result = i.dst;
     ctx.emit(std::move(i));
-    write_xmm(ctx, insn.operands[0], result, IrType::I128);
+    write_xmm(ctx, insn.operands[0], result, result_type);
 }
 
 void lift_simd_to_gpr(LiftCtx& ctx, std::string_view name, IrType result_type) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands < 2) return;
-    IrValue src = read_xmm(ctx, insn.operands[1], IrType::I128);
+    // movmsk reads the whole (VEX.256) register; lane extracts read an xmm.
+    const IrType width = name.starts_with("_mm_movemask") ? vector_type(insn) : IrType::I128;
+    IrValue src = read_xmm(ctx, insn.operands[1], width);
     if (src.kind == IrValueKind::None) return;
     IrInst i;
     i.op = IrOp::Intrinsic;
-    i.name = std::string(name);
+    i.name = vector_name(name, width);
     i.dst = ctx.temp(result_type);
     i.srcs[0] = src;
     i.src_count = 1;
@@ -403,9 +437,12 @@ void lift_simd_to_gpr(LiftCtx& ctx, std::string_view name, IrType result_type) {
 
 void lift_simd_insert(LiftCtx& ctx, std::string_view name, IrType lane_type) {
     const auto& insn = *ctx.insn;
-    if (insn.num_operands != 3 || insn.operands[2].kind != Operand::Kind::Immediate) return;
-    IrValue vec = read_xmm(ctx, insn.operands[0], IrType::I128);
-    IrValue lane = materialize_rvalue(insn.operands[1], ctx);
+    // Legacy `pinsrd xmm, r/m, imm`; VEX `vpinsrd xmm, xmm(vvvv), r/m, imm`.
+    const std::size_t base = insn.num_operands == 4 ? 1 : 0;
+    if (insn.num_operands != 3 + base ||
+        insn.operands[2 + base].kind != Operand::Kind::Immediate) return;
+    IrValue vec = read_xmm(ctx, insn.operands[base], IrType::I128);
+    IrValue lane = materialize_rvalue(insn.operands[1 + base], ctx);
     if (vec.kind == IrValueKind::None || lane.kind == IrValueKind::None) return;
     lane = ctx.match_size(lane, lane_type, /*sign_ext=*/false);
     IrInst i;
@@ -414,7 +451,7 @@ void lift_simd_insert(LiftCtx& ctx, std::string_view name, IrType lane_type) {
     i.dst = ctx.temp(IrType::I128);
     i.srcs[0] = vec;
     i.srcs[1] = lane;
-    i.srcs[2] = ctx.imm(static_cast<u8>(insn.operands[2].imm.value), IrType::I32);
+    i.srcs[2] = ctx.imm(static_cast<u8>(insn.operands[2 + base].imm.value), IrType::I32);
     i.src_count = 3;
     const IrValue result = i.dst;
     ctx.emit(std::move(i));
@@ -423,6 +460,24 @@ void lift_simd_insert(LiftCtx& ctx, std::string_view name, IrType lane_type) {
 
 void lift_simd_cmp_predicate(LiftCtx& ctx, std::string_view suffix) {
     const auto& insn = *ctx.insn;
+    if (insn.x86_vex || insn.x86_evex) {
+        // AVX has 32 predicates and one intrinsic taking the immediate.
+        if (insn.num_operands != 4 || insn.operands[3].kind != Operand::Kind::Immediate) return;
+        const IrType width = suffix == "sd" || suffix == "ss" ? IrType::I128 : vector_type(insn);
+        IrInst i;
+        i.op = IrOp::Intrinsic;
+        i.name = vector_name(std::format("_mm_cmp_{}", suffix), width);
+        i.dst = ctx.temp(width);
+        i.srcs[0] = read_xmm(ctx, insn.operands[1], width);
+        i.srcs[1] = read_xmm(ctx, insn.operands[2], width);
+        i.srcs[2] = ctx.imm(static_cast<u8>(insn.operands[3].imm.value), IrType::I32);
+        i.src_count = 3;
+        if (i.srcs[0].kind == IrValueKind::None || i.srcs[1].kind == IrValueKind::None) return;
+        const IrValue result = i.dst;
+        ctx.emit(std::move(i));
+        write_xmm(ctx, insn.operands[0], result, width);
+        return;
+    }
     if (insn.num_operands != 3 || insn.operands[2].kind != Operand::Kind::Immediate) return;
     static constexpr std::array predicates{
         "eq", "lt", "le", "unord", "neq", "nlt", "nle", "ord"};
@@ -446,26 +501,31 @@ void lift_simd_cmp_predicate(LiftCtx& ctx, std::string_view suffix) {
 void lift_simd_blendv(LiftCtx& ctx, std::string_view name) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands < 2) return;
+    // Legacy: xmm0 is the implicit selector. VEX: `dst, a, b, mask`.
+    const bool vex = insn.num_operands == 4;
+    const IrType width = vector_type(insn);
     IrInst i;
     i.op = IrOp::Intrinsic;
-    i.name = std::string(name);
-    i.dst = ctx.temp(IrType::I128);
-    i.srcs[0] = read_xmm(ctx, insn.operands[0], IrType::I128);
-    i.srcs[1] = read_xmm(ctx, insn.operands[1], IrType::I128);
-    i.srcs[2] = IrValue::make_reg(Reg::Xmm0, IrType::I128);
+    i.name = vector_name(name, width);
+    i.dst = ctx.temp(width);
+    i.srcs[0] = read_xmm(ctx, insn.operands[vex ? 1 : 0], width);
+    i.srcs[1] = read_xmm(ctx, insn.operands[vex ? 2 : 1], width);
+    i.srcs[2] = vex ? read_xmm(ctx, insn.operands[3], width)
+                    : IrValue::make_reg(Reg::Xmm0, IrType::I128);
     i.src_count = 3;
     if (i.srcs[0].kind == IrValueKind::None || i.srcs[1].kind == IrValueKind::None) return;
     const IrValue result = i.dst;
     ctx.emit(std::move(i));
-    write_xmm(ctx, insn.operands[0], result, IrType::I128);
+    write_xmm(ctx, insn.operands[0], result, width);
 }
 
 // `ptest a, b`: ZF = (a & b) == 0, CF = (~a & b) == 0, the rest cleared.
-void lift_ptest(LiftCtx& ctx) {
+void lift_ptest(LiftCtx& ctx, std::string_view suffix) {
     const auto& insn = *ctx.insn;
     if (insn.num_operands != 2) return;
-    const IrValue a = read_xmm(ctx, insn.operands[0], IrType::I128);
-    const IrValue b = read_xmm(ctx, insn.operands[1], IrType::I128);
+    const IrType width = vector_type(insn);
+    const IrValue a = read_xmm(ctx, insn.operands[0], width);
+    const IrValue b = read_xmm(ctx, insn.operands[1], width);
     if (a.kind == IrValueKind::None || b.kind == IrValueKind::None) return;
     const auto test = [&](std::string_view name) {
         IrInst i;
@@ -479,8 +539,10 @@ void lift_ptest(LiftCtx& ctx) {
         ctx.emit(std::move(i));
         return result;
     };
-    ctx.emit_set_flag(Flag::Zf, test("_mm_testz_si128"));
-    ctx.emit_set_flag(Flag::Cf, test("_mm_testc_si128"));
+    const std::string_view vector_suffix =
+        suffix == "si128" && width == IrType::I256 ? "si256" : suffix;
+    ctx.emit_set_flag(Flag::Zf, test(vector_name(std::format("_mm_testz_{}", vector_suffix), width)));
+    ctx.emit_set_flag(Flag::Cf, test(vector_name(std::format("_mm_testc_{}", vector_suffix), width)));
     ctx.emit_set_flag(Flag::Sf, ctx.imm(0, IrType::I1));
     ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
 }
@@ -558,7 +620,7 @@ void lift_clflush(LiftCtx& ctx) {
 
 void lift_half_move(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
-    if (insn.num_operands != 2) return;
+    if (insn.num_operands != 2 && insn.num_operands != 3) return;
     const auto intrinsic = [&](std::string_view name, IrType type,
                                std::initializer_list<IrValue> args) {
         IrInst i;
@@ -584,17 +646,20 @@ void lift_half_move(LiftCtx& ctx) {
         return;
     }
     const bool high = mnemonic == Mnemonic::Movhps;
-    const IrValue dst = read_xmm(ctx, insn.operands[0], IrType::I128);
+    // VEX takes the untouched half from vvvv: `vmovhps xmm0, xmm1, [m]`.
+    const std::size_t from = insn.num_operands == 3 ? 1 : 0;
+    const IrValue dst = read_xmm(ctx, insn.operands[from], IrType::I128);
     if (dst.kind == IrValueKind::None) return;
+    const Operand& source = insn.operands[from + 1];
     IrValue result;
-    if (insn.operands[1].kind == Operand::Kind::Register) {
+    if (source.kind == Operand::Kind::Register) {
         // movlhps: dst.high = src.low. movhlps: dst.low = src.high.
-        const IrValue src = read_xmm(ctx, insn.operands[1], IrType::I128);
+        const IrValue src = read_xmm(ctx, source, IrType::I128);
         result = high ? intrinsic("_mm_unpacklo_epi64", IrType::I128, {dst, src})
                       : intrinsic("_mm_unpackhi_epi64", IrType::I128, {src, dst});
-    } else if (insn.operands[1].kind == Operand::Kind::Memory) {
-        const IrValue loaded = ctx.emit_load(compute_ea(insn.operands[1].mem, ctx), IrType::I64,
-                                             insn.operands[1].mem.segment);
+    } else if (source.kind == Operand::Kind::Memory) {
+        const IrValue loaded = ctx.emit_load(compute_ea(source.mem, ctx), IrType::I64,
+                                             source.mem.segment);
         const IrValue lane = intrinsic("_mm_cvtsi64_si128", IrType::I128, {loaded});
         result = high
             ? intrinsic("_mm_unpacklo_epi64", IrType::I128, {dst, lane})
@@ -604,6 +669,231 @@ void lift_half_move(LiftCtx& ctx) {
         return;
     }
     write_xmm(ctx, insn.operands[0], result, IrType::I128);
+}
+
+// `vpermd ymm0, ymm1(idx), ymm2(src)`: the intrinsic takes (src, idx).
+void lift_permutevar(LiftCtx& ctx, std::string_view name) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    const IrType width = vector_type(insn);
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst = ctx.temp(width);
+    i.srcs[0] = read_xmm(ctx, insn.operands[2], width);
+    i.srcs[1] = read_xmm(ctx, insn.operands[1], width);
+    i.src_count = 2;
+    if (i.srcs[0].kind == IrValueKind::None || i.srcs[1].kind == IrValueKind::None) return;
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, width);
+}
+
+// vinserti128 / vinsertf128: a 256-bit source and a 128-bit lane.
+void lift_insert128(LiftCtx& ctx, std::string_view name) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 4 || insn.operands[3].kind != Operand::Kind::Immediate) return;
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = std::string(name);
+    i.dst = ctx.temp(IrType::I256);
+    i.srcs[0] = read_xmm(ctx, insn.operands[1], IrType::I256);
+    i.srcs[1] = read_xmm(ctx, insn.operands[2], IrType::I128);
+    i.srcs[2] = ctx.imm(insn.operands[3].imm.value & 1, IrType::I32);
+    i.src_count = 3;
+    if (i.srcs[0].kind == IrValueKind::None || i.srcs[1].kind == IrValueKind::None) return;
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, IrType::I256);
+}
+
+// vextracti128 / vextractf128 / vcvtps2ph: a 128-bit (or narrower) result
+// written to an xmm register or stored.
+void lift_vector_narrow_out(LiftCtx& ctx, std::string_view name, bool keep_immediate) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3 || insn.operands[2].kind != Operand::Kind::Immediate) return;
+    const IrType width = vector_type(insn);
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = vector_name(name, width);
+    i.dst = ctx.temp(IrType::I128);
+    i.srcs[0] = read_xmm(ctx, insn.operands[1], width);
+    i.srcs[1] = ctx.imm(insn.operands[2].imm.value & (keep_immediate ? 0xff : 1), IrType::I32);
+    i.src_count = 2;
+    if (i.srcs[0].kind == IrValueKind::None) return;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    const Operand& destination = insn.operands[0];
+    if (destination.kind == Operand::Kind::Memory && destination.mem.size == 8) {
+        IrInst low;
+        low.op = IrOp::Intrinsic;
+        low.name = "_mm_cvtsi128_si64";
+        low.dst = ctx.temp(IrType::I64);
+        low.srcs[0] = result;
+        low.src_count = 1;
+        result = low.dst;
+        ctx.emit(std::move(low));
+        ctx.emit_store(compute_ea(destination.mem, ctx), result, destination.mem.segment);
+        return;
+    }
+    write_xmm(ctx, destination, result, IrType::I128);
+}
+
+// vmaskmov / vpmaskmov: masked loads produce a vector, masked stores write
+// memory through the intrinsic.
+void lift_masked_move(LiftCtx& ctx, std::string_view name, bool store) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    const IrType width = vector_type(insn);
+    const Operand& memory = insn.operands[store ? 0 : 2];
+    if (memory.kind != Operand::Kind::Memory) return;
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = vector_name(name, width);
+    i.srcs[0] = compute_ea(memory.mem, ctx);
+    i.srcs[1] = read_xmm(ctx, insn.operands[1], width);
+    i.src_count = 2;
+    if (store) {
+        i.srcs[i.src_count++] = read_xmm(ctx, insn.operands[2], width);
+        ctx.emit(std::move(i));
+        return;
+    }
+    i.dst = ctx.temp(width);
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, width);
+}
+
+// VEX register-form vmovss / vmovsd: low lane from the source, the rest
+// from vvvv.
+void lift_vex_scalar_merge(LiftCtx& ctx, bool single) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = single ? "_mm_move_ss" : "_mm_move_sd";
+    i.dst = ctx.temp(IrType::I128);
+    i.srcs[0] = read_xmm(ctx, insn.operands[1], IrType::I128);
+    i.srcs[1] = read_xmm(ctx, insn.operands[2], IrType::I128);
+    i.src_count = 2;
+    if (i.srcs[0].kind == IrValueKind::None || i.srcs[1].kind == IrValueKind::None) return;
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    write_xmm(ctx, insn.operands[0], result, IrType::I128);
+}
+
+void lift_vzeroall(LiftCtx& ctx) {
+    for (unsigned r = 0; r < 16; ++r) {
+        IrInst i;
+        i.op = IrOp::Intrinsic;
+        i.name = "_mm256_setzero_si256";
+        i.dst = ctx.temp(IrType::I256);
+        const IrValue zero = i.dst;
+        ctx.emit(std::move(i));
+        ctx.emit_assign(IrValue::make_reg(static_cast<Reg>(static_cast<unsigned>(Reg::Ymm0) + r),
+                                          IrType::I256), zero);
+    }
+}
+
+// FMA3: 132 = dst*src3 + src2, 213 = src2*dst + src3, 231 = src2*src3 + dst.
+// Packed forms map to `_mm*_f*_p*`; scalar ones to C99 fma/fmaf, which round
+// once exactly like the instruction.
+void lift_fma(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    const std::string_view name = mnemonic_name(insn.mnemonic);
+    const std::size_t digits = name.find_first_of("0123456789");
+    if (digits == std::string_view::npos || name.size() < digits + 5) return;
+    const std::string_view operation = name.substr(0, digits);
+    const std::string_view order = name.substr(digits, 3);
+    const std::string_view suffix = name.substr(digits + 3);
+    const bool scalar = suffix == "ss" || suffix == "sd";
+    const IrType type = scalar ? (suffix == "ss" ? IrType::F32 : IrType::F64) : vector_type(insn);
+    const IrValue destination = scalar ? materialize_fp_rvalue(insn.operands[0], ctx, type)
+                                       : read_xmm(ctx, insn.operands[0], type);
+    const IrValue second = scalar ? materialize_fp_rvalue(insn.operands[1], ctx, type)
+                                  : read_xmm(ctx, insn.operands[1], type);
+    const IrValue third = scalar ? materialize_fp_rvalue(insn.operands[2], ctx, type)
+                                 : read_xmm(ctx, insn.operands[2], type);
+    if (destination.kind == IrValueKind::None || second.kind == IrValueKind::None ||
+        third.kind == IrValueKind::None) return;
+    IrValue a = second, b = third, c = destination;
+    if (order == "132") { a = destination; b = third; c = second; }
+    else if (order == "213") { a = second; b = destination; c = third; }
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.dst = ctx.temp(type);
+    if (scalar) {
+        const auto negate = [&](IrValue value) {
+            IrInst neg;
+            neg.op = IrOp::Neg;
+            neg.dst = ctx.temp(type);
+            neg.srcs[0] = value;
+            neg.src_count = 1;
+            const IrValue negated = neg.dst;
+            ctx.emit(std::move(neg));
+            return negated;
+        };
+        if (operation == "fnmadd" || operation == "fnmsub") a = negate(a);
+        if (operation == "fmsub" || operation == "fnmsub") c = negate(c);
+        i.name = type == IrType::F32 ? "fmaf" : "fma";
+    } else {
+        i.name = vector_name(std::format("_mm_{}_{}", operation, suffix), type);
+    }
+    i.srcs[0] = a;
+    i.srcs[1] = b;
+    i.srcs[2] = c;
+    i.src_count = 3;
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    if (scalar) store_fp_lvalue(insn.operands[0], result, ctx, type);
+    else write_xmm(ctx, insn.operands[0], result, type);
+}
+
+// AMD FMA4: dst = src1 * src2 +/- src3 with all four operands explicit.
+void lift_fma4(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 4) return;
+    const std::string_view name = mnemonic_name(insn.mnemonic);
+    const std::string_view operation = name.substr(0, name.size() - 2);
+    const std::string_view suffix = name.substr(name.size() - 2);
+    const bool scalar = suffix == "ss" || suffix == "sd";
+    const IrType type = scalar ? (suffix == "ss" ? IrType::F32 : IrType::F64) : vector_type(insn);
+    const auto read = [&](const Operand& operand) {
+        return scalar ? materialize_fp_rvalue(operand, ctx, type) : read_xmm(ctx, operand, type);
+    };
+    IrValue a = read(insn.operands[1]);
+    const IrValue b = read(insn.operands[2]);
+    IrValue c = read(insn.operands[3]);
+    if (a.kind == IrValueKind::None || b.kind == IrValueKind::None || c.kind == IrValueKind::None) return;
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.dst = ctx.temp(type);
+    if (scalar) {
+        const auto negate = [&](IrValue value) {
+            IrInst neg;
+            neg.op = IrOp::Neg;
+            neg.dst = ctx.temp(type);
+            neg.srcs[0] = value;
+            neg.src_count = 1;
+            const IrValue negated = neg.dst;
+            ctx.emit(std::move(neg));
+            return negated;
+        };
+        if (operation == "fnmadd" || operation == "fnmsub") a = negate(a);
+        if (operation == "fmsub" || operation == "fnmsub") c = negate(c);
+        i.name = type == IrType::F32 ? "fmaf" : "fma";
+    } else {
+        i.name = vector_name(std::format("_mm_{}_{}", operation, suffix), type);
+    }
+    i.srcs[0] = a;
+    i.srcs[1] = b;
+    i.srcs[2] = c;
+    i.src_count = 3;
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    if (scalar) store_fp_lvalue(insn.operands[0], result, ctx, type);
+    else write_xmm(ctx, insn.operands[0], result, type);
 }
 
 // `movd/movq xmm, r/m32|64`: copy a scalar into the low lane and zero the

@@ -285,7 +285,8 @@ void Emitter::prepare_phi_copies() {
             if (inst.op == IrOp::Phi &&
                 ((is_float_type(inst.dst.type) && !is_x86_32_abi(abi) && !x87_phi) ||
                  (type_bits(inst.dst.type) > 64 &&
-                  (inst.dst.type != IrType::I128 || is_ppc_abi() || with_calls))) &&
+                  ((inst.dst.type != IrType::I128 && inst.dst.type != IrType::I256 &&
+                    inst.dst.type != IrType::I512) || is_ppc_abi() || with_calls))) &&
                 (!with_calls || (ssa_key(inst.dst) && live.contains(*ssa_key(inst.dst))))) return;
         }
     }
@@ -400,6 +401,16 @@ void Emitter::emit_phi_copies(const IrBlock& block, std::string_view ind,
         std::vector<std::string> values;
         for (const auto& [destination, source] : copies) {
             std::string value = expr(source);
+            // Bridge vector widths only; a merge retyped to a scalar takes
+            // the scalar as it is.
+            const auto key = ssa_key(destination);
+            const auto scoped = key ? scoped_ssa_values.find(*key) : scoped_ssa_values.end();
+            const IrType merged = scoped != scoped_ssa_values.end() ? scoped->second.first.type
+                                                                    : destination.type;
+            const IrInst* producer = def_of(source);
+            if (type_bits(merged) >= 128 && producer && type_bits(producer->dst.type) >= 128) {
+                value = adapt_vector_lane(source, std::move(value));
+            }
             if (options.c_source && !is_float_type(destination.type) &&
                 type_bits(destination.type) <= 64) {
                 value = std::format("({})(uintptr_t)({})", c_type_name_for(destination), value);

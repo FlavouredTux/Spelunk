@@ -229,8 +229,12 @@ std::string format_instruction(const Instruction& insn) {
         insn.mnemonic == Mnemonic::Bzhi || insn.mnemonic == Mnemonic::Pext ||
         insn.mnemonic == Mnemonic::Pdep || insn.mnemonic == Mnemonic::Shlx ||
         insn.mnemonic == Mnemonic::Shrx || insn.mnemonic == Mnemonic::Sarx ||
-        insn.mnemonic == Mnemonic::Mulx;
-    if ((insn.x86_vex || insn.x86_evex) && !bmi_name) s += 'v';
+        insn.mnemonic == Mnemonic::Mulx || insn.mnemonic == Mnemonic::Rorx ||
+        insn.mnemonic == Mnemonic::Blsr || insn.mnemonic == Mnemonic::Blsmsk ||
+        insn.mnemonic == Mnemonic::Blsi || insn.mnemonic == Mnemonic::Bextr;
+    // VEX-only mnemonics (vpermq, vbroadcastss, ...) already carry the v.
+    if ((insn.x86_vex || insn.x86_evex) && !bmi_name &&
+        !mnemonic_name(insn.mnemonic).starts_with('v')) s += 'v';
     s += mnemonic_name(insn.mnemonic);
     // ARM: append the S (flag-setting) suffix and the condition-code suffix.
     // Both are inert for other architectures (arm_setflags defaults false,

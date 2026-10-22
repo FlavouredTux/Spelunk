@@ -219,6 +219,110 @@ void lift_bit_count(LiftCtx& ctx, bool leading) {
     store_lvalue(insn.operands[0], result, ctx);
 }
 
+// BLSR / BLSMSK / BLSI dst(vvvv), src: lowest-set-bit arithmetic.
+void lift_bmi1(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 2) return;
+    const IrType t = operand_type(insn.operands[0]);
+    const IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), t, /*sign_ext=*/false);
+    const IrValue zero = ctx.imm(0, t);
+    IrValue result;
+    if (insn.mnemonic == Mnemonic::Blsi) {
+        result = ctx.emit_binop(IrOp::And, src, ctx.emit_binop(IrOp::Sub, zero, src));
+        ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpNe, src, zero));
+    } else {
+        const IrValue below = ctx.emit_binop(IrOp::Sub, src, ctx.imm(1, t));
+        result = ctx.emit_binop(insn.mnemonic == Mnemonic::Blsr ? IrOp::And : IrOp::Xor, src, below);
+        ctx.emit_set_flag(Flag::Cf, ctx.emit_cmp(IrOp::CmpEq, src, zero));
+    }
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, result, zero));
+    ctx.emit_set_flag(Flag::Sf, ctx.emit_cmp(IrOp::CmpSlt, result, zero));
+    ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
+    ctx.last_pf_value = {};
+    ctx.last_flag_src = {};
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
+// BEXTR dst, src, control: the field at control[7:0] of length control[15:8].
+void lift_bextr(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3) return;
+    const IrType t = operand_type(insn.operands[0]);
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = t == IrType::I64 ? "__bextr_u64" : "__bextr_u32";
+    i.dst = ctx.temp(t == IrType::I64 ? IrType::I64 : IrType::I32);
+    i.srcs[0] = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), i.dst.type, false);
+    i.srcs[1] = ctx.match_size(materialize_rvalue(insn.operands[2], ctx), i.dst.type, false);
+    i.src_count = 2;
+    IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    result = ctx.match_size(result, t, /*sign_ext=*/false);
+    ctx.emit_set_flag(Flag::Zf, ctx.emit_cmp(IrOp::CmpEq, result, ctx.imm(0, t)));
+    ctx.emit_set_flag(Flag::Cf, ctx.imm(0, IrType::I1));
+    ctx.emit_set_flag(Flag::Of, ctx.imm(0, IrType::I1));
+    ctx.last_fp_cmp_a = {};
+    ctx.last_fp_cmp_b = {};
+    ctx.last_pf_value = {};
+    ctx.last_flag_src = {};
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
+// RORX dst, src, imm8: rotate right without touching the flags.
+void lift_rorx(LiftCtx& ctx) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 3 || insn.operands[2].kind != Operand::Kind::Immediate) return;
+    const IrType t = operand_type(insn.operands[0]);
+    const unsigned width = type_bits(t);
+    const IrValue src = ctx.match_size(materialize_rvalue(insn.operands[1], ctx), t, /*sign_ext=*/false);
+    const auto count = static_cast<unsigned>(insn.operands[2].imm.value) & (width - 1);
+    IrValue result = src;
+    if (count != 0) {
+        result = ctx.emit_binop(IrOp::Or,
+            ctx.emit_binop(IrOp::Lshr, src, ctx.imm(count, t)),
+            ctx.emit_binop(IrOp::Shl, src, ctx.imm(width - count, t)));
+    }
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
+// An operand-less instruction that produces its destination (rdrand,
+// rdseed, rdssp). RDRAND/RDSEED report success in CF; model success so the
+// retry loop around them reads as such.
+void lift_value_intrinsic(LiftCtx& ctx, std::string_view name) {
+    const auto& insn = *ctx.insn;
+    if (insn.num_operands != 1) return;
+    const IrType t = operand_type(insn.operands[0]);
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = std::format("{}{}", name, type_bits(t));
+    i.dst = ctx.temp(t);
+    const IrValue result = i.dst;
+    ctx.emit(std::move(i));
+    if (insn.mnemonic == Mnemonic::Rdrand || insn.mnemonic == Mnemonic::Rdseed) {
+        ctx.emit_set_flag(Flag::Cf, ctx.imm(1, IrType::I1));
+    }
+    store_lvalue(insn.operands[0], result, ctx);
+}
+
+// XGETBV: EDX:EAX = XCR[ECX].
+void lift_xgetbv(LiftCtx& ctx) {
+    IrInst i;
+    i.op = IrOp::Intrinsic;
+    i.name = "_xgetbv";
+    i.dst = ctx.temp(IrType::I64);
+    i.srcs[0] = ctx.match_size(ctx.read_reg(Reg::Ecx), IrType::I32, /*sign_ext=*/false);
+    i.src_count = 1;
+    const IrValue value = i.dst;
+    ctx.emit(std::move(i));
+    store_lvalue(Operand::make_reg(Reg::Eax),
+                 ctx.match_size(value, IrType::I32, /*sign_ext=*/false), ctx);
+    store_lvalue(Operand::make_reg(Reg::Edx),
+                 ctx.match_size(ctx.emit_binop(IrOp::Lshr, value, ctx.imm(32, IrType::I64)),
+                                IrType::I32, /*sign_ext=*/false), ctx);
+}
+
 // POPCNT dst, src: dst = number of set bits in src. ZF reflects whether the
 // source was zero; other status flags are architecturally cleared, but ZF is
 // the one emitted code commonly consumes.

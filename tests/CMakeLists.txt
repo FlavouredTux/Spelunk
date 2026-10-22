@@ -829,7 +829,7 @@ spelunk_golden_test(
 )
 
 foreach(_fn scale magnitude pick truncate forward after_calls merged_calls nothing walk
-             guarded naps copy)
+             guarded guarded_by_helpers naps copy)
     spelunk_golden_test(
         NAME    win32_abi_${_fn}_pseudo
         FIXTURE win32_abi

@@ -1,0 +1,8 @@
+// _guarded_by_helpers
+uint32_t _guarded_by_helpers(uint32_t a1) {
+  /* SEH frame: handler _except_handler */
+  /* __try level 0 */
+  uint32_t r__merged_calls = _merged_calls(a1);
+  /* leave __try */
+  return r__merged_calls;
+}

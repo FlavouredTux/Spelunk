@@ -60,6 +60,31 @@ __attribute__((dllexport, naked)) int __cdecl guarded(int a) { __asm__(
     "mov -0x10(%ebp), %ecx\n mov %ecx, %fs:0\n"
     "pop %edi\n pop %esi\n pop %ebx\n mov %ebp, %esp\n pop %ebp\n ret"); }
 
+// The same frame built by shared helpers, as VS2005+ does it:
+// `push size; push scope_table; call __SEH_prolog4` sets up ebp, the
+// locals, the saved registers and the registration; __SEH_epilog4 tears
+// them down. Both keep eax, the return value.
+__attribute__((used)) static unsigned security_cookie = 0xbb40e64e;
+__asm__(
+    "seh_prolog4:\n"
+    "  push $_except_handler\n  pushl %fs:0\n"
+    "  mov 0x10(%esp), %eax\n  mov %ebp, 0x10(%esp)\n  lea 0x10(%esp), %ebp\n"
+    "  sub %eax, %esp\n  push %ebx\n  push %esi\n  push %edi\n"
+    "  mov _security_cookie, %eax\n  xor %eax, -4(%ebp)\n  xor %ebp, %eax\n  push %eax\n"
+    "  mov %esp, -0x18(%ebp)\n  pushl -8(%ebp)\n"
+    "  mov -4(%ebp), %eax\n  movl $-2, -4(%ebp)\n  mov %eax, -8(%ebp)\n"
+    "  lea -0x10(%ebp), %eax\n  mov %eax, %fs:0\n  ret\n"
+    "seh_epilog4:\n"
+    "  mov -0x10(%ebp), %ecx\n  mov %ecx, %fs:0\n  pop %ecx\n"
+    "  pop %edi\n  pop %edi\n  pop %esi\n  pop %ebx\n"
+    "  mov %ebp, %esp\n  pop %ebp\n  push %ecx\n  ret\n");
+__attribute__((dllexport, naked)) int __cdecl guarded_by_helpers(int a) { __asm__(
+    "push $8\n push $_scope_table\n call seh_prolog4\n"
+    "movl $0, -4(%ebp)\n"
+    "push 8(%ebp)\n call _merged_calls\n add $4, %esp\n"
+    "movl $-2, -4(%ebp)\n"
+    "call seh_epilog4\n ret"); }
+
 // An import called repeatedly through a register: each `call esi` pops
 // the argument pushed for it.
 __attribute__((dllexport, naked)) int __cdecl naps(void) { __asm__(

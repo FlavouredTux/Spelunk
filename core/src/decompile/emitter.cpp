@@ -24,6 +24,7 @@
 #include <spelunk/binary/symbol.hpp>
 #include <spelunk/common/annotations.hpp>
 #include <spelunk/common/error.hpp>
+#include <spelunk/common/timing.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/decompile/emit_options.hpp>
 #include <spelunk/disasm/register.hpp>
@@ -94,12 +95,18 @@ std::optional<Annotations> with_debug_types(const Binary* binary, const Annotati
 void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
                          const SignatureContext& sig_ctx,
                          bool structured_render) {
-    e.analyze(*sf.ir);
+    {
+        ScopedTimer timer("emit.analyze");
+        e.analyze(*sf.ir);
+    }
     if (structured_render && sf.body) e.refine_call_return_regions(*sf.body);
     e.assign_synthetic_struct_types();
     e.infer_shared_call_return_types();
     if (sf.body) e.collect_structured_return_values(*sf.body);
-    e.name_merge_values();
+    {
+        ScopedTimer timer("emit.name_merge_values");
+        e.name_merge_values();
+    }
     e.infer_objc_block_capture_names();
     e.frame_layout = compute_frame_layout(*sf.ir, e.binary);
     if (structured_render && sf.body) {
@@ -131,9 +138,15 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
     if (!sig_ctx.has_user_sig && !sig_ctx.has_metadata_sig) {
         e.promote_block_like_first_arg();
     }
-    e.bind_call_returns();
+    {
+        ScopedTimer timer("emit.bind_call_returns");
+        e.bind_call_returns();
+    }
     e.refine_synthetic_member_types_from_stores();
-    e.analyze_merge_definite_assignment();
+    {
+        ScopedTimer timer("emit.definite_assignment");
+        e.analyze_merge_definite_assignment();
+    }
     if (structured_render) {
         e.prepare_phi_copies();
         if (sf.body) e.refine_call_return_regions(*sf.body);
@@ -627,9 +640,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         : Abi::SysVAmd64;
 
     EmitterMetadataStorage metadata;
-    setup_emitter_metadata(e, working, binary, metadata);
-    const SignatureContext sig_ctx =
-        setup_signature_context(e, working, binary, annotations);
+    {
+        ScopedTimer timer("emit.metadata");
+        setup_emitter_metadata(e, working, binary, metadata);
+    }
+    const SignatureContext sig_ctx = [&] {
+        ScopedTimer timer("emit.signature_context");
+        return setup_signature_context(e, working, binary, annotations);
+    }();
     run_analysis_passes(e, working, sig_ctx, true);
 
     const addr_t start = working.ir->start;
@@ -681,8 +699,10 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
             }
         }
     }
-    const std::string header = select_function_header(
-        e, working, sig_ctx, annotations, name);
+    const std::string header = [&] {
+        ScopedTimer timer("emit.header");
+        return select_function_header(e, working, sig_ctx, annotations, name);
+    }();
     out += rtti_alias_comment(e, start);
 
     // Render the body into a buffer first so we can decide which
@@ -694,6 +714,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // tidy without leaning on the dead-decl pruner (which only
     // recognises `TYPE NAME = expr;` form).
     auto body = RenderChunk::capture(options.line_map, [&](std::string& text) {
+        ScopedTimer timer("emit.render_body");
         if (working.body) e.emit_region(*working.body, 1, text);
     });
     std::string& body_buf = body.text();
@@ -701,6 +722,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         body_buf += structurer_fail_markers(working, binary);
     }
 
+    ScopedTimer declarations_timer("emit.declarations");
     const std::set<std::string> matrix_locals = matrix_stack_locals(body_buf);
     collect_address_taken_functions(e, body_buf, binary);
     std::string declaration_context = header + body_buf;
@@ -736,6 +758,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     // recorded. Preserve accurate source-to-output mappings even if the
     // resulting function listing is slightly noisier.
     if (!options.line_map) {
+        ScopedTimer timer("emit.text_cleanup");
         out = strip_label_only_if_blocks(out);
         out = strip_dead_declarations(e, out, header);
         out = strip_unused_global_externs(e, std::move(out), header);

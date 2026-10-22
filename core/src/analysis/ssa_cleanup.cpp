@@ -77,6 +77,7 @@ using Position = std::pair<std::size_t, std::size_t>;
                                             addr_t phi_block, const SsaKey& feeder,
                                             const std::set<SsaKey>& phi_keys,
                                             const std::map<SsaKey, Position>& definitions,
+                                            const std::map<SsaKey, std::size_t>& reads,
                                             std::set<SsaKey>& snapshot_loads) {
     const auto feeder_definition = definitions.find(feeder);
     if (feeder_definition == definitions.end()) return false;
@@ -109,7 +110,14 @@ using Position = std::pair<std::size_t, std::size_t>;
     // Everything reachable after the feeder without re-entering the Phi
     // block. Phi operands are read on the incoming edge, so they belong to
     // the region of their predecessor.
-    std::set<Position> region;
+    // Region membership per block: instructions from `region_first[bi]` on,
+    // Phis excluded.
+    constexpr std::size_t kOutside = static_cast<std::size_t>(-1);
+    std::vector<std::size_t> region_first(fn.blocks.size(), kOutside);
+    const auto in_region = [&](const Position& at) {
+        return region_first[at.first] != kOutside && at.second >= region_first[at.first] &&
+               fn.blocks[at.first].insts[at.second].op != IrOp::Phi;
+    };
     std::vector<IrValue> edge_reads;
     std::set<std::size_t> visited;
     std::vector<Position> pending{{def_bi, def_ii + 1}};
@@ -117,9 +125,7 @@ using Position = std::pair<std::size_t, std::size_t>;
         const auto [bi, first] = pending.back();
         pending.pop_back();
         const auto& block = fn.blocks[bi];
-        for (std::size_t ii = first; ii < block.insts.size(); ++ii) {
-            if (block.insts[ii].op != IrOp::Phi) region.insert({bi, ii});
-        }
+        region_first[bi] = std::min(region_first[bi], first);
         for (addr_t successor : block.successors) {
             const auto found = fn.block_at.find(successor);
             if (found == fn.block_at.end()) continue;  // tail call or exit
@@ -159,7 +165,7 @@ using Position = std::pair<std::size_t, std::size_t>;
         }
         if (!checked.insert(*key).second) return true;
         const auto found = definitions.find(*key);
-        if (found == definitions.end() || region.contains(found->second)) return true;
+        if (found == definitions.end() || in_region(found->second)) return true;
         if (depth > 32) return false;
         const IrInst& definition = fn.blocks[found->second.first].insts[found->second.second];
         if (definition.op == IrOp::Phi) return true;  // a different, still-live value
@@ -179,35 +185,57 @@ using Position = std::pair<std::size_t, std::size_t>;
         return true;
     };
     std::size_t feeder_reads_in_region = 0;
-    for (const auto& [bi, ii] : region) {
-        const IrInst& inst = fn.blocks[bi].insts[ii];
-        for (u8 i = 0; i < inst.src_count; ++i) {
-            feeder_reads_in_region += ssa_key(inst.srcs[i]) == feeder;
-            if (!safe_read(safe_read, inst.srcs[i], 0)) return false;
+    for (std::size_t bi = 0; bi < fn.blocks.size(); ++bi) {
+        if (region_first[bi] == kOutside) continue;
+        const auto& insts = fn.blocks[bi].insts;
+        for (std::size_t ii = region_first[bi]; ii < insts.size(); ++ii) {
+            const IrInst& inst = insts[ii];
+            if (inst.op == IrOp::Phi) continue;
+            for (u8 i = 0; i < inst.src_count; ++i) {
+                feeder_reads_in_region += ssa_key(inst.srcs[i]) == feeder;
+                if (!safe_read(safe_read, inst.srcs[i], 0)) return false;
+            }
         }
     }
     for (const auto& value : edge_reads) {
         feeder_reads_in_region += ssa_key(value) == feeder;
         if (!safe_read(safe_read, value, 0)) return false;
     }
-    std::size_t feeder_reads = 0;
-    for (const auto& block : fn.blocks) {
-        for (const auto& inst : block.insts) {
-            if (&inst == &phi) continue;
-            for (u8 i = 0; i < inst.src_count; ++i) feeder_reads += ssa_key(inst.srcs[i]) == feeder;
-            for (const auto& value : inst.phi_operands) feeder_reads += ssa_key(value) == feeder;
-        }
-    }
+    // Every read of the feeder outside `phi` itself must be in the region.
+    const auto total = reads.find(feeder);
+    std::size_t feeder_reads = total == reads.end() ? 0 : total->second;
+    for (u8 i = 0; i < phi.src_count; ++i) feeder_reads -= ssa_key(phi.srcs[i]) == feeder;
+    for (const auto& value : phi.phi_operands) feeder_reads -= ssa_key(value) == feeder;
     if (feeder_reads != feeder_reads_in_region) return false;
     snapshot_loads.insert(captures.begin(), captures.end());
     return true;
 }
 
+// The blocks that read each value: in an instruction, or on an edge they
+// leave through (a successor's Phi taking the value from them).
+struct ReadingBlocks {
+    std::map<SsaKey, std::set<addr_t>> by_key;
+
+    explicit ReadingBlocks(const IrFunction& fn) {
+        for (const auto& block : fn.blocks) {
+            for (const auto& inst : block.insts) {
+                for (u8 i = 0; i < inst.src_count; ++i)
+                    if (auto key = ssa_key(inst.srcs[i])) by_key[*key].insert(block.start);
+                if (inst.op != IrOp::Phi) continue;
+                for (std::size_t i = 0; i < inst.phi_operands.size() && i < inst.phi_preds.size(); ++i)
+                    if (auto key = ssa_key(inst.phi_operands[i])) by_key[*key].insert(inst.phi_preds[i]);
+            }
+        }
+    }
+};
+
 // Whether `key` (a Phi joined at `home`) can be read once control reaches
 // `join` without first passing back through `home`.
-[[nodiscard]] bool phi_live_at(const IrFunction& fn, const SsaKey& key,
-                               addr_t home, addr_t join) {
+[[nodiscard]] bool phi_live_at(const IrFunction& fn, const ReadingBlocks& reading,
+                               const SsaKey& key, addr_t home, addr_t join) {
     if (home == join) return true;
+    const auto readers = reading.by_key.find(key);
+    if (readers == reading.by_key.end()) return false;
     std::set<addr_t> seen;
     std::vector<addr_t> work{join};
     while (!work.empty()) {
@@ -216,23 +244,9 @@ using Position = std::pair<std::size_t, std::size_t>;
         if (address == home || !seen.insert(address).second) continue;
         const auto found = fn.block_at.find(address);
         if (found == fn.block_at.end()) continue;
-        const auto& block = fn.blocks[found->second];
-        for (const auto& inst : block.insts) {
-            for (u8 i = 0; i < inst.src_count; ++i) {
-                if (ssa_key(inst.srcs[i]) == key) return true;
-            }
-        }
-        for (addr_t successor : block.successors) {
-            const auto next = fn.block_at.find(successor);
-            if (next == fn.block_at.end()) continue;
-            const auto& phis = fn.blocks[next->second].insts;
-            for (const auto& inst : phis) {
-                if (inst.op != IrOp::Phi) continue;
-                for (std::size_t i = 0; i < inst.phi_operands.size() && i < inst.phi_preds.size(); ++i) {
-                    if (inst.phi_preds[i] == address && ssa_key(inst.phi_operands[i]) == key) return true;
-                }
-            }
-            work.push_back(successor);
+        if (readers->second.contains(address)) return true;
+        for (addr_t successor : fn.blocks[found->second].successors) {
+            if (fn.block_at.contains(successor)) work.push_back(successor);
         }
     }
     return false;
@@ -304,16 +318,18 @@ recover_ssa_merge_locals(const IrFunction& fn,
             if (std::ranges::find(sharing, k) == sharing.end()) sharing.push_back(k);
         }
     }
+    std::optional<ReadingBlocks> reading;
     for (const auto& [_, sharing] : phis_by_operand) {
         bool disjoint = sharing.size() > 1;
+        if (disjoint && !reading) reading.emplace(fn);
         for (std::size_t i = 0; i < sharing.size() && disjoint; ++i) {
             for (std::size_t j = i + 1; j < sharing.size() && disjoint; ++j) {
                 const auto& a = sharing[i];
                 const auto& b = sharing[j];
                 disjoint = callbacks.type_name(phi_defs.at(a)->dst) ==
                                callbacks.type_name(phi_defs.at(b)->dst) &&
-                           !phi_live_at(fn, a, phi_block.at(a), phi_block.at(b)) &&
-                           !phi_live_at(fn, b, phi_block.at(b), phi_block.at(a));
+                           !phi_live_at(fn, *reading, a, phi_block.at(a), phi_block.at(b)) &&
+                           !phi_live_at(fn, *reading, b, phi_block.at(b), phi_block.at(a));
             }
         }
         if (!disjoint) continue;
@@ -334,6 +350,7 @@ recover_ssa_merge_locals(const IrFunction& fn,
     }
 
     std::set<std::string> used;
+    std::map<SsaKey, std::size_t> reads;   // every read of each value, counted on first need
     for (const auto& [_, keys] : groups) {
         std::set<SsaKey> group_keys(keys.begin(), keys.end());
         bool saw_initializer_only_operand = false;
@@ -416,9 +433,19 @@ recover_ssa_merge_locals(const IrFunction& fn,
                         for (u8 i = 0; i < od->src_count; ++i)
                             in_place |= ssa_key(od->srcs[i]) == keys[0];
                     }
+                    if (!in_place && reads.empty()) {
+                        for (const auto& block : fn.blocks) {
+                            for (const auto& inst : block.insts) {
+                                for (u8 i = 0; i < inst.src_count; ++i)
+                                    if (auto read = ssa_key(inst.srcs[i])) ++reads[*read];
+                                for (const auto& value : inst.phi_operands)
+                                    if (auto read = ssa_key(value)) ++reads[*read];
+                            }
+                        }
+                    }
                     if (!in_place &&
                         !feeder_replaces_dead_phi(fn, *phi, phi_block.at(k), *ok, group_keys,
-                                                  definitions, result.snapshot_loads)) continue;
+                                                  definitions, reads, result.snapshot_loads)) continue;
                 }
                 result.value_names.emplace(*ok, name);
                 local.keys.push_back(*ok);

@@ -210,6 +210,26 @@ struct Emitter {
         IrValue     value;
     };
     std::map<addr_t, std::vector<GuardedEdgeAssignment>> merge_guarded_edge_assignments;
+    // The `if (edge condition) { copies }` blocks the last rendered block
+    // ended with, so a following `if` on the same condition can take the
+    // copies into the arm for that edge instead.
+    struct EdgeCopyBlock {
+        IrValue     condition;
+        bool        when_true = false;  // guards the condition's true edge
+        std::string text;               // the whole rendered block
+        std::string body;               // its statements, one level deeper
+    };
+    mutable std::vector<EdgeCopyBlock> trailing_edge_copies;
+    // Strip the trailing copy blocks on `condition` from `out`, oldest
+    // first. Empty unless they are exactly what `out` ends with.
+    [[nodiscard]] std::vector<EdgeCopyBlock>
+    take_trailing_edge_copies(std::string& out, const IrValue& condition) const;
+    // Emit the condition's bindings and lift the trailing copy blocks for
+    // it into {then arm, else arm} statements, for an `if (cond)` whose
+    // then arm runs when the condition is `!invert`.
+    [[nodiscard]] std::pair<std::string, std::string>
+    take_arm_copies(const IrValue& condition, std::string_view cond, bool invert,
+                    std::string_view ind, std::string& out) const;
     // Block addresses referenced by some `RegionKind::Goto` in the
     // structured tree. emit_block prepends a C `bb_<addr>:` label at
     // these blocks so the gotos resolve. Without this the structurer's

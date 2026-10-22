@@ -449,6 +449,10 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
         if (take && !r.children.empty()) emit_region(*r.children[0], depth, out);
         return;
     }
+    // Rendering the arm replaces the copy blocks the condition's block
+    // ended with; keep them for the `if` itself.
+    auto pending_copies = std::move(trailing_edge_copies);
+    trailing_edge_copies.clear();
     // Pre-render the body and skip the whole if when nothing survived. The
     // body can collapse to empty after store/decl suppression (e.g. an
     // -O0 prologue's xmm spill block that becomes literally `if (rax) {}`)
@@ -466,11 +470,32 @@ void Emitter::emit_region_if_then(const Region& r, int depth, std::string& out) 
     }
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const std::string cond = render_condition(r.condition, r.invert);
-    emit_materializations_for_rendered_value(r.condition, cond, out, ind);
+    trailing_edge_copies = std::move(pending_copies);
+    const auto [then_copies, else_copies] = take_arm_copies(r.condition, cond, r.invert, ind, out);
     append_if_opening(*this, r.condition, cond, ind, out);
+    out += then_copies;
     std::move(body).append_to(out);
     emitted_bindings.insert(bindings_after_body.begin(), bindings_after_body.end());
+    if (!else_copies.empty()) out += std::format("{}}} else {{\n{}", ind, else_copies);
     out += std::format("{}}}\n", ind);
+}
+
+std::pair<std::string, std::string>
+Emitter::take_arm_copies(const IrValue& condition, std::string_view cond, bool invert,
+                         std::string_view ind, std::string& out) const {
+    // The branch's edge copies run on entry to the arm for that edge.
+    // Moving them past bindings the condition needs would reorder reads,
+    // so they stay put unless there are none.
+    std::string materialized;
+    emit_materializations_for_rendered_value(condition, cond, materialized, ind);
+    std::pair<std::string, std::string> arms;
+    if (materialized.empty()) {
+        for (auto& copy : take_trailing_edge_copies(out, condition)) {
+            (copy.when_true != invert ? arms.first : arms.second) += copy.body;
+        }
+    }
+    out += materialized;
+    return arms;
 }
 
 void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) const {
@@ -482,6 +507,8 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         }
         return;
     }
+    auto pending_copies = std::move(trailing_edge_copies);
+    trailing_edge_copies.clear();
     const std::string ind(static_cast<std::size_t>(depth) * 2u, ' ');
     const auto bindings_before_children = emitted_bindings;
     auto then_buf = RenderChunk::capture(
@@ -548,7 +575,9 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         std::swap(then_empty, else_empty);
     }
     const std::string cond = render_condition(r.condition, invert_effective);
-    emit_materializations_for_rendered_value(r.condition, cond, out, ind);
+    trailing_edge_copies = std::move(pending_copies);
+    auto [then_copies, else_copies] =
+        take_arm_copies(r.condition, cond, invert_effective, ind, out);
     // An empty then arm swapped the else into it above; the collapse still
     // keys off the original then region.
     if (r.children.size() > 1 && r.children[0] && r.children[1] &&
@@ -560,8 +589,9 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
             });
         const auto bindings_after_else_outer = emitted_bindings;
         emitted_bindings = bindings_before_else_outer;
-        if (!rendered_region_empty(else_outer.text())) {
+        if (!rendered_region_empty(else_outer.text()) && else_copies.empty()) {
             append_if_opening(*this, r.condition, cond, ind, out);
+            out += then_copies;
             std::move(then_buf).append_to(out);
             emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
             out += std::format("{}}}\n", ind);
@@ -574,10 +604,12 @@ void Emitter::emit_region_if_else(const Region& r, int depth, std::string& out) 
         else_outer.discard();
     }
     append_if_opening(*this, r.condition, cond, ind, out);
+    out += then_copies;
     std::move(then_buf).append_to(out);
     emitted_bindings.insert(bindings_after_then.begin(), bindings_after_then.end());
-    if (!else_empty) {
+    if (!else_empty || !else_copies.empty()) {
         out += std::format("{}}} else {{\n", ind);
+        out += else_copies;
         std::move(else_buf).append_to(out);
         emitted_bindings.insert(bindings_after_else.begin(), bindings_after_else.end());
     } else {
@@ -693,6 +725,77 @@ void Emitter::emit_region_while(const Region& r, int depth, std::string& out) co
         }
         out += std::format("{}}}\n", ind);
         return;
+    }
+    // Everything runs before the test: `for (;;) { H; if (!c) break; }`
+    // is exactly `do { H } while (c);` - unless H has its own `continue`,
+    // which would then run the test instead of restarting H.
+    const auto has_own_continue = [](this const auto& self, const Region& region) -> bool {
+        if (region.kind == RegionKind::Continue) return true;
+        if (region.kind == RegionKind::While || region.kind == RegionKind::DoWhile ||
+            region.kind == RegionKind::For || region.kind == RegionKind::Loop) return false;
+        return std::ranges::any_of(region.children, [&](const auto& child) {
+            return child && self(*child);
+        });
+    };
+    const auto structurally_empty = [](this const auto& self, const Region* region) -> bool {
+        return !region || region->kind == RegionKind::Empty ||
+            (region->kind == RegionKind::Seq &&
+             std::ranges::all_of(region->children, [&](const auto& child) {
+                 return self(child.get());
+             }));
+    };
+    const bool header_only = std::all_of(
+        r.children.begin() + 1, r.children.end(),
+        [&](const auto& child) { return structurally_empty(child.get()); });
+    if (header_only && r.children[0] && !has_own_continue(*r.children[0])) {
+        // The test sits outside the body's scope, so it may not read a
+        // name the body declares, nor need a binding of its own there.
+        const auto saved_bindings = emitted_bindings;
+        emitted_bindings.insert(bindings_after_header.begin(), bindings_after_header.end());
+        const std::string cond = render_condition(r.condition, r.invert);
+        std::string materialized;
+        emit_materializations_for_rendered_value(r.condition, cond, materialized, inner_ind);
+        emitted_bindings = saved_bindings;
+        // A body declaration the test reads moves in front of the loop when
+        // it sits at the body's top level: `T x; do { x = ...; } while (x);`.
+        bool test_in_scope = materialized.empty();
+        std::string hoisted;
+        std::string body_text = header_buf.text();
+        for (const std::string& name : declared_identifiers(body_text)) {
+            if (!test_in_scope) break;
+            if (!text_contains_identifier(cond, name)) continue;
+            test_in_scope = false;
+            if (options.line_map) break;
+            const std::string needle = std::format(" {} = ", name);
+            for (std::size_t line = 0; line < body_text.size();) {
+                const std::size_t end = std::min(body_text.find('\n', line), body_text.size());
+                const std::string_view text(body_text.data() + line, end - line);
+                const std::size_t at = text.find(needle);
+                if (text.starts_with(inner_ind) && text.size() > inner_ind.size() &&
+                    text[inner_ind.size()] != ' ' && at != std::string_view::npos &&
+                    at > inner_ind.size()) {
+                    const std::string_view type = text.substr(inner_ind.size(), at - inner_ind.size());
+                    if (std::ranges::all_of(type, [](char c) {
+                            return c_ident_char(c) || c == '*' || c == ' ';
+                        })) {
+                        hoisted += std::format("{}{} {};\n", ind, type, name);
+                        body_text.erase(line + inner_ind.size(), type.size() + 1);
+                        test_in_scope = true;
+                        break;
+                    }
+                }
+                line = end + 1;
+            }
+        }
+        if (test_in_scope) {
+            if (!hoisted.empty()) header_buf.text() = std::move(body_text);
+            out += hoisted;
+            out += std::format("{}do {{\n", ind);
+            std::move(header_buf).append_to(out);
+            emitted_bindings.insert(bindings_after_header.begin(), bindings_after_header.end());
+            out += std::format("{}}} while ({});\n", ind, cond);
+            return;
+        }
     }
     const std::string break_cond = render_condition(r.condition, !r.invert);
     out += std::format("{}for (;;) {{\n", ind);

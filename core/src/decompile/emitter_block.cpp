@@ -954,8 +954,24 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
 }
 
 // Assignments the structurer hoisted onto this block's outgoing edge.
+std::vector<Emitter::EdgeCopyBlock>
+Emitter::take_trailing_edge_copies(std::string& out, const IrValue& condition) const {
+    std::vector<EdgeCopyBlock> taken;
+    if (options.line_map) return taken;
+    while (!trailing_edge_copies.empty()) {
+        EdgeCopyBlock& last = trailing_edge_copies.back();
+        if (!same_value_key(last.condition, condition) || !out.ends_with(last.text)) break;
+        out.resize(out.size() - last.text.size());
+        taken.push_back(std::move(last));
+        trailing_edge_copies.pop_back();
+    }
+    std::ranges::reverse(taken);
+    return taken;
+}
+
 void Emitter::emit_merge_edge_assignments(addr_t block_start, std::string_view ind,
                                           std::string& out) const {
+    trailing_edge_copies.clear();
     if (explicit_phi_copies || scalar_join_copies) {
         if (auto block = fn->block_at.find(block_start); block != fn->block_at.end())
             emit_phi_copies(fn->blocks[block->second], ind, out);
@@ -1017,7 +1033,10 @@ void Emitter::emit_merge_edge_assignments(addr_t block_start, std::string_view i
             emit_materializations_for_rendered_value(assignment.value, rendered, out, ind);
             copies += std::format("{}{} = {};\n", inner, assignment.name, rendered);
         }
-        out += std::format("{}if ({}) {{\n{}{}}}\n", ind, condition, copies, ind);
+        std::string text = std::format("{}if ({}) {{\n{}{}}}\n", ind, condition, copies, ind);
+        out += text;
+        trailing_edge_copies.push_back({terminator.srcs[0], target == terminator.target1,
+                                        std::move(text), std::move(copies)});
     }
 }
 

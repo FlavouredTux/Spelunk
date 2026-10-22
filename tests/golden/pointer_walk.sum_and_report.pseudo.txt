@@ -7,12 +7,11 @@ uint32_t sum_and_report(const node* head) {
   void* ptr = head;
   uint64_t value = 0;
   if (head) {
-    for (;;) {
+    do {
       uint32_t t11 = ptr->field_0;
       value = (uint64_t)((uint32_t)value + t11);
       ptr = ptr->field_8;
-      if (!ptr) break;
-    }
+    } while (ptr);
   }
   printf("%u\n", (uint32_t)value);
   return (uint32_t)value;

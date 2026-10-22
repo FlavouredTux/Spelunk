@@ -324,7 +324,24 @@ void Emitter::prepare_phi_copies() {
             }
         }
     }
+    // A branch whose edges carry copies tests its condition again around
+    // them, so the condition needs a name; without copies it renders inline.
+    const auto has_edge_copies = [&](const IrBlock& block) {
+        for (const addr_t target : block.successors) {
+            const auto found = fn->block_at.find(target);
+            if (found == fn->block_at.end()) continue;
+            for (const IrInst& phi : fn->blocks[found->second].insts) {
+                if (phi.op != IrOp::Phi || !scoped_ssa_name(phi.dst)) continue;
+                for (std::size_t i = 0; i < phi.phi_preds.size() && i < phi.phi_operands.size(); ++i) {
+                    if (phi.phi_preds[i] == block.start &&
+                        !same_ssa_value(phi.dst, phi.phi_operands[i])) return true;
+                }
+            }
+        }
+        return false;
+    };
     for (const auto& block : fn->blocks) {
+        const bool name_condition = has_edge_copies(block);
         for (const auto& inst : block.insts) {
             if (with_calls && is_call_arg_barrier(inst)) continue;
             const auto require_value = [&](const IrValue& value, bool force) {
@@ -337,7 +354,7 @@ void Emitter::prepare_phi_copies() {
             };
             for (const IrValue& value : inst.phi_operands) require_value(value, true);
             for (u8 i = 0; i < inst.src_count; ++i)
-                require_value(inst.srcs[i], inst.op == IrOp::CondBranch);
+                require_value(inst.srcs[i], inst.op == IrOp::CondBranch && name_condition);
         }
     }
     for (const auto& value : call_arguments) if (def_of(value)) remember(value, "ssa");
@@ -399,14 +416,19 @@ void Emitter::emit_phi_copies(const IrBlock& block, std::string_view ind,
         }
         if (independent || copies.size() == 1) {
             std::string inner(ind);
-            if (terminator.op == IrOp::CondBranch) {
-                const auto condition = render_condition(terminator.srcs[0], target != terminator.target1);
-                out += std::format("{}if ({}) {{\n", ind, condition);
-                inner += "  ";
-            }
+            if (terminator.op == IrOp::CondBranch) inner += "  ";
+            std::string body;
             for (std::size_t i = 0; i < copies.size(); ++i)
-                out += std::format("{}{} = {};\n", inner, *scoped_ssa_name(copies[i].first), values[i]);
-            if (terminator.op == IrOp::CondBranch) out += std::format("{}}}\n", ind);
+                body += std::format("{}{} = {};\n", inner, *scoped_ssa_name(copies[i].first), values[i]);
+            if (terminator.op != IrOp::CondBranch) {
+                out += body;
+                continue;
+            }
+            const auto condition = render_condition(terminator.srcs[0], target != terminator.target1);
+            std::string text = std::format("{}if ({}) {{\n{}{}}}\n", ind, condition, body, ind);
+            out += text;
+            trailing_edge_copies.push_back({terminator.srcs[0], target == terminator.target1,
+                                            std::move(text), std::move(body)});
             continue;
         }
         for (const auto& [_, value] : scoped_ssa_values) reserved.insert(value.second);

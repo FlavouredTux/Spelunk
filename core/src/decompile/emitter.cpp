@@ -263,7 +263,7 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
         if (r.kind == RegionKind::Return &&
             r.condition.kind != IrValueKind::None) {
             IrValue return_value = r.condition;
-            if ((e.abi == Abi::SysVAmd64 || e.abi == Abi::Win64) &&
+            if ((e.abi == Abi::SysVAmd64 || e.abi == Abi::Win64 || is_x86_32_abi(e.abi)) &&
                 return_value.kind == IrValueKind::Reg &&
                 canonical_reg(return_value.reg) == Reg::Rax &&
                 return_value.version == 0) {

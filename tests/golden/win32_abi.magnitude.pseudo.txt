@@ -1,0 +1,4 @@
+// _magnitude
+double _magnitude(double a1) {
+  return !(a1 < 0.0) ? a1 : -a1;
+}

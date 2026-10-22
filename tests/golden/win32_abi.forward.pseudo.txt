@@ -1,0 +1,4 @@
+// _forward
+uint32_t _forward(double a1, uint32_t a2) {
+  return _truncate(a1 + a1, a2, 7) + 1;
+}

@@ -457,6 +457,9 @@ spelunk_use_prebuilt_fixture(symresolve_demo)
 # stack-argument loop and a kernel32 import. It needs a mingw cross
 # compiler, so the bytes are pinned; win32.c carries the build line.
 spelunk_use_prebuilt_fixture(win32)
+# x87 arithmetic and compares, an 8-byte stack argument through a realigned
+# frame, and stdcall imports. Pinned like win32; win32_abi.c has the line.
+spelunk_use_prebuilt_fixture(win32_abi)
 # Multi-resolver: two functions populating disjoint slot ranges of one
 # fnptr table - the iterative detector has to find both, the merged
 # output has to attribute every slot to the right resolver.
@@ -803,6 +806,18 @@ spelunk_golden_test(
     ARGS    "-p|-s|_loop_sum"
     GOLDEN  win32.loop_sum.pseudo.txt
 )
+
+# x87 values live on a register stack; the lifter tracks it by position so
+# loads, compares (fnstsw/sahf and fcomi), fldcw truncation and st0 returns
+# read as plain double arithmetic.
+foreach(_fn scale magnitude pick truncate forward after_calls)
+    spelunk_golden_test(
+        NAME    win32_abi_${_fn}_pseudo
+        FIXTURE win32_abi
+        ARGS    "-p|-s|_${_fn}"
+        GOLDEN  win32_abi.${_fn}.pseudo.txt
+    )
+endforeach()
 
 # ---- imports (ELF PLT/GOT resolution) --------------------------------------
 #

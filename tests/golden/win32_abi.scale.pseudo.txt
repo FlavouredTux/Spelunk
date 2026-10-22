@@ -1,0 +1,5 @@
+// _scale
+double _scale(uint32_t a1, double a2) {
+  double t4 = cvtsi2sd((uint64_t)(int32_t)a1);
+  return t4 * a2;
+}

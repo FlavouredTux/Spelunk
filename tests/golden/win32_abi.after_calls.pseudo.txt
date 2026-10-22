@@ -1,0 +1,7 @@
+// _after_calls
+uint32_t _after_calls(uint32_t a1, uint32_t a2) {
+  uint32_t r_GetTickCount = GetTickCount();
+  Sleep(a1);
+  SetLastError(5);
+  return a1 + r_GetTickCount + a2;
+}

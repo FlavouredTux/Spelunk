@@ -1,0 +1,4 @@
+// _pick
+uint32_t _pick(double a1, double a2, uint32_t a3, uint32_t a4) {
+  return a1 > a2 ? a3 : a4;
+}

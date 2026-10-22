@@ -1,0 +1,5 @@
+// _truncate
+uint32_t _truncate(double a1, uint32_t a2, uint32_t a3) {
+  uint32_t t32 = (int32_t)a1;
+  return t32 + a3 * a2;
+}

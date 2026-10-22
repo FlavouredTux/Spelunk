@@ -84,6 +84,11 @@ constexpr std::array kCHelpers{
     CHelper{"spelunk_cvttss2si_32", "static inline int32_t spelunk_cvttss2si_32(float x) { return x > -2147483649.0 && x < 0x1p31 ? (int32_t)x : INT32_MIN; }"},
     CHelper{"spelunk_cvttsd2si_64", "static inline int64_t spelunk_cvttsd2si_64(double x) { return x >= -0x1p63 && x < 0x1p63 ? (int64_t)x : INT64_MIN; }"},
     CHelper{"spelunk_cvttss2si_64", "static inline int64_t spelunk_cvttss2si_64(float x) { return x >= -0x1p63 && x < 0x1p63 ? (int64_t)x : INT64_MIN; }"},
+    // cvtsd2si / cvtss2si round with the current mode, as nearbyint does.
+    CHelper{"spelunk_cvtsd2si_32", "static inline int32_t spelunk_cvtsd2si_32(double x) { double r = __builtin_nearbyint(x); return r >= -0x1p31 && r < 0x1p31 ? (int32_t)r : INT32_MIN; }"},
+    CHelper{"spelunk_cvtss2si_32", "static inline int32_t spelunk_cvtss2si_32(float x) { double r = __builtin_nearbyint((double)x); return r >= -0x1p31 && r < 0x1p31 ? (int32_t)r : INT32_MIN; }"},
+    CHelper{"spelunk_cvtsd2si_64", "static inline int64_t spelunk_cvtsd2si_64(double x) { double r = __builtin_nearbyint(x); return r >= -0x1p63 && r < 0x1p63 ? (int64_t)r : INT64_MIN; }"},
+    CHelper{"spelunk_cvtss2si_64", "static inline int64_t spelunk_cvtss2si_64(float x) { double r = __builtin_nearbyint((double)x); return r >= -0x1p63 && r < 0x1p63 ? (int64_t)r : INT64_MIN; }"},
     CHelper{"unordered_fp_compare", "static inline bool unordered_fp_compare(double a, double b) { return isnan(a) || isnan(b); }"},
     CHelper{"carry_add",
             "static inline int carry_add(uint64_t a, uint64_t b) "
@@ -540,7 +545,8 @@ std::string Emitter::c_forward_type_declarations(std::string_view context) const
 }
 
 std::string Emitter::c_intrinsic_name(const IrInst& inst) {
-    if (inst.name == "cvttss2si" || inst.name == "cvttsd2si") {
+    if (inst.name == "cvttss2si" || inst.name == "cvttsd2si" ||
+        inst.name == "cvtss2si" || inst.name == "cvtsd2si") {
         return std::format("spelunk_{}_{}", inst.name, type_bits(inst.dst.type));
     }
     if (inst.name == "_mm_max_sd") return "spelunk_max_sd";

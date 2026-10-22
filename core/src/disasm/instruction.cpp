@@ -250,6 +250,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Rdrand: return "rdrand";
         case Mnemonic::Rdseed: return "rdseed";
         case Mnemonic::Rdssp: return "rdssp";
+        case Mnemonic::Incssp: return "incssp";
         case Mnemonic::Cmpxchg16b: return "cmpxchg16b";
         case Mnemonic::Adcx: return "adcx";
         case Mnemonic::Adox: return "adox";
@@ -720,6 +721,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Maxss:         return "maxss";
         case Mnemonic::Cvtsi2ss:      return "cvtsi2ss";
         case Mnemonic::Cvttss2si:     return "cvttss2si";
+        case Mnemonic::Cvtss2si:      return "cvtss2si";
         case Mnemonic::Cvtss2sd:      return "cvtss2sd";
         case Mnemonic::Ucomiss:       return "ucomiss";
         case Mnemonic::Comiss:        return "comiss";
@@ -736,6 +738,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::Maxsd:         return "maxsd";
         case Mnemonic::Cvtsi2sd:      return "cvtsi2sd";
         case Mnemonic::Cvttsd2si:     return "cvttsd2si";
+        case Mnemonic::Cvtsd2si:      return "cvtsd2si";
         case Mnemonic::Cvtsd2ss:      return "cvtsd2ss";
         case Mnemonic::Ucomisd:       return "ucomisd";
         case Mnemonic::Comisd:        return "comisd";
@@ -833,6 +836,7 @@ std::string_view mnemonic_name(Mnemonic m) noexcept {
         case Mnemonic::X87Fcomi:      return "fcomi";
         case Mnemonic::X87Fcomip:     return "fcomip";
         case Mnemonic::X87Ffree:      return "ffree";
+        case Mnemonic::X87Ffreep:     return "ffreep";
         default: break;
     }
     return instruction_detail::arm_mnemonic_name(m);

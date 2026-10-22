@@ -298,6 +298,8 @@ void lift_instruction_body(LiftCtx& ctx) {
         // xmm -> gpr (truncating). Operand 0 is gpr, operand 1 is xmm/m.
         case Mnemonic::Cvttss2si: lift_fp_to_int(ctx, "cvttss2si", IrType::F32); break;
         case Mnemonic::Cvttsd2si: lift_fp_to_int(ctx, "cvttsd2si", IrType::F64); break;
+        case Mnemonic::Cvtss2si:  lift_fp_to_int(ctx, "cvtss2si", IrType::F32); break;
+        case Mnemonic::Cvtsd2si:  lift_fp_to_int(ctx, "cvtsd2si", IrType::F64); break;
 
         // xmm width changes.
         case Mnemonic::Cvtss2sd:
@@ -498,6 +500,10 @@ void lift_instruction_body(LiftCtx& ctx) {
         case Mnemonic::Rdrand:    lift_value_intrinsic(ctx, "_rdrand_u"); break;
         case Mnemonic::Rdseed:    lift_value_intrinsic(ctx, "_rdseed_u"); break;
         case Mnemonic::Rdssp:     lift_value_intrinsic(ctx, "_get_ssp_u"); break;
+        case Mnemonic::Incssp:
+            lift_intrinsic(ctx, insn.num_operands && operand_type(insn.operands[0]) == IrType::I64
+                ? "_incsspq" : "_incsspd");
+            break;
         case Mnemonic::Cmpxchg16b: lift_intrinsic(ctx, "x64.cmpxchg16b"); break;
         case Mnemonic::Adcx:      lift_adx(ctx, Flag::Cf); break;
         case Mnemonic::Adox:      lift_adx(ctx, Flag::Of); break;

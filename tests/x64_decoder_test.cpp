@@ -691,13 +691,13 @@ void test_x87_db_de_df_integer_pop_fini() {
             {{xb(0xDF, 0x08)}, M::X87Fisttp, "fisttp word ptr [rax]"},
             {{xb(0xDF, 0x20)}, M::X87Fbld, "fbld tbyte ptr [rax]"},
             {{xb(0xDF, 0x30)}, M::X87Fbstp, "fbstp tbyte ptr [rax]"},
+            {{xb(0xDF, 0xC4)}, M::X87Ffreep, "ffreep st(4)"},
         },
         {
             {{xb(0xDB, 0x20)}, "reserved DB /4"},
             {{xb(0xDB, 0xE1)}, "reserved DB E1"},
             {{xb(0xDE, 0xD1)}, "reserved DE D1"},
             {{xb(0xDE, 0xDA)}, "reserved DE DA"},
-            {{xb(0xDF, 0xC4)}, "ffreep not modeled"},
             {{xb(0xDF, 0xF9)}, "reserved DF F9"},
         },
         true);
@@ -716,6 +716,36 @@ void test_x87_db_de_df_integer_pop_fini() {
     }
 }
 
+// cvtsd2si / cvtss2si round with MXCSR, unlike the truncating 2C forms;
+// F3 REX.W 0F AE /5 is CET's incsspq.
+void test_rounding_conversions_and_incssp() {
+    const spelunk::X64Decoder decoder;
+    struct Case {
+        std::vector<std::byte> code;
+        M mnemonic;
+        const char* text;
+        const char* intrinsic;
+    };
+    const std::array<Case, 4> cases{{
+        {xb(0xF2, 0x48, 0x0F, 0x2D, 0xC0), M::Cvtsd2si, "cvtsd2si rax, xmm0", "cvtsd2si"},
+        {xb(0xF3, 0x0F, 0x2D, 0xC1), M::Cvtss2si, "cvtss2si eax, xmm1", "cvtss2si"},
+        {xb(0xC5, 0xFB, 0x2D, 0xC0), M::Cvtsd2si, "vcvtsd2si eax, xmm0", "cvtsd2si"},
+        {xb(0xF3, 0x48, 0x0F, 0xAE, 0xEE), M::Incssp, "incssp rsi", "_incsspq"},
+    }};
+    for (const auto& c : cases) {
+        const auto insn = decoder.decode(c.code, 0x401000);
+        check_eq(insn.has_value(), true, c.text);
+        if (!insn) continue;
+        check_eq(insn->mnemonic, c.mnemonic, c.text);
+        check_eq(insn->length, static_cast<spelunk::u8>(c.code.size()), c.text);
+        check_eq(spelunk::format_instruction(*insn), std::string(c.text), c.text);
+        bool lifted = false;
+        for (const auto& i : lift_one(c.code).blocks[0].insts)
+            lifted |= i.op == spelunk::IrOp::Intrinsic && i.name == c.intrinsic;
+        check_eq(lifted, true, c.intrinsic);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -731,5 +761,6 @@ int main() {
     test_x87_d8_d9_memory_register_state();
     test_x87_dc_dd_m64_and_fucom();
     test_x87_db_de_df_integer_pop_fini();
+    test_rounding_conversions_and_incssp();
     return fails == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

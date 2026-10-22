@@ -42,7 +42,7 @@ bool is_side_effect(IrOp op) noexcept {
 // conversions, libm functions and x87 state reads. DCE drops them unused.
 bool is_pure_intrinsic(std::string_view name) noexcept {
     static constexpr std::string_view kPure[] = {
-        "unordered_fp_compare", "cvtsi2sd", "cvtss2sd", "cvtsd2ss", "cvttsd2si",
+        "unordered_fp_compare", "cvtsi2sd", "cvtss2sd", "cvtsd2ss", "cvttsd2si", "cvttss2si", "cvtsd2si", "cvtss2si",
         "sqrt", "fabs", "sin", "cos", "tan", "atan2", "fmod", "remainder",
         "rint", "lrint", "llrint", "x87.f2xm1", "x87.fyl2x", "x87.fyl2xp1",
         "x87.fscale", "x87.exponent", "x87.significand", "x87.load80", "x87.fbld",

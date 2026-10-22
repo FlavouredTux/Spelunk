@@ -387,8 +387,10 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                     "x64: unsupported opcode 0f {:02x} {:#04x} at {:#x}", escape, opcode, addr)));
             }
         }
-        // Single register-form encodings of groups 7 and 9 and CET's RDSSP.
-        else if ((opcode == 0x01 || opcode == 0xC7 || (opcode == 0x1E && ctx.prefix.rep)) &&
+        // Single register-form encodings of groups 7 and 9 and CET's
+        // RDSSP / INCSSP.
+        else if ((opcode == 0x01 || opcode == 0xC7 ||
+                  ((opcode == 0x1E || opcode == 0xAE) && ctx.prefix.rep)) &&
                  !ctx.eof()) {
             const u8 modrm = static_cast<u8>(ctx.code[ctx.pos]);
             const u8 reg = static_cast<u8>((modrm >> 3) & 7);
@@ -405,6 +407,12 @@ X64Decoder::decode(std::span<const std::byte> code, addr_t addr) const noexcept 
                 } else if (!register_form && reg == 1) {
                     legacy_entry.mnemonic = Mnemonic::Cmpxchg16b;
                     legacy_entry.op1 = OpSpec::M;
+                }
+            } else if (opcode == 0xAE) {
+                if (register_form && reg == 5) {
+                    legacy_entry.mnemonic = Mnemonic::Incssp;
+                    legacy_entry.op1 = OpSpec::Ev;
+                    ctx.prefix.rep = false;
                 }
             } else if (register_form && reg == 1) {
                 legacy_entry.mnemonic = Mnemonic::Rdssp;

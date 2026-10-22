@@ -151,6 +151,7 @@ struct X87RegForm {
             }
         case 0xDF:
             if (b == 0xE0) return {Mnemonic::X87Fnstsw, xs_ax};
+            if (top == 0xC0) return {Mnemonic::X87Ffreep,  xs_sti};
             if (top == 0xE8) return {Mnemonic::X87Fucomip, xs_sti};
             if (top == 0xF0) return {Mnemonic::X87Fcomip,  xs_sti};
             return {};

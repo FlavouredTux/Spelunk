@@ -434,6 +434,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f3() noexcept {
     t[0x11] = op(Mnemonic::MovssStore,  OpSpec::Wss, OpSpec::Vx, OpSpec::None, true);
     t[0x2A] = op(Mnemonic::Cvtsi2ss,    OpSpec::Vx, OpSpec::Ev,  OpSpec::None, true);
     t[0x2C] = op(Mnemonic::Cvttss2si,   OpSpec::Gv, OpSpec::Wss, OpSpec::None, true);
+    t[0x2D] = op(Mnemonic::Cvtss2si,    OpSpec::Gv, OpSpec::Wss, OpSpec::None, true);
     t[0x2E] = op(Mnemonic::Ucomiss,     OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x51] = op(Mnemonic::Sqrtss,      OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
     t[0x58] = op(Mnemonic::Addss,       OpSpec::Vx, OpSpec::Wss, OpSpec::None, true);
@@ -474,6 +475,7 @@ constexpr std::array<OpcodeEntry, 256> build_secondary_f2() noexcept {
     t[0x11] = op(Mnemonic::MovsdXmmStore, OpSpec::Wsd, OpSpec::Vx,  OpSpec::None, true);
     t[0x2A] = op(Mnemonic::Cvtsi2sd,      OpSpec::Vx,  OpSpec::Ev,  OpSpec::None, true);
     t[0x2C] = op(Mnemonic::Cvttsd2si,     OpSpec::Gv,  OpSpec::Wsd, OpSpec::None, true);
+    t[0x2D] = op(Mnemonic::Cvtsd2si,      OpSpec::Gv,  OpSpec::Wsd, OpSpec::None, true);
     t[0x51] = op(Mnemonic::Sqrtsd,        OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x58] = op(Mnemonic::Addsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);
     t[0x59] = op(Mnemonic::Mulsd,         OpSpec::Vx,  OpSpec::Wsd, OpSpec::None, true);

@@ -68,7 +68,7 @@ enum class Mnemonic : u16 {
     Cdq, Cqo, Cwde, Cdqe,
     Endbr64, Endbr32,
     // x87 wait, XGETBV, RDRAND/RDSEED, CET RDSSP, CMPXCHG16B, ADX and AMD FMA4.
-    Fwait, Xgetbv, Rdrand, Rdseed, Rdssp, Cmpxchg16b,
+    Fwait, Xgetbv, Rdrand, Rdseed, Rdssp, Incssp, Cmpxchg16b,
     Adcx, Adox, Fma4Fmaddsubps, Fma4Fmaddsubpd, Fma4Fmsubaddps, Fma4Fmsubaddpd,
     Fma4Fmaddps, Fma4Fmaddpd, Fma4Fmaddss, Fma4Fmaddsd, Fma4Fmsubps, Fma4Fmsubpd,
     Fma4Fmsubss, Fma4Fmsubsd, Fma4Fnmaddps, Fma4Fnmaddpd, Fma4Fnmaddss, Fma4Fnmaddsd,
@@ -270,6 +270,7 @@ enum class Mnemonic : u16 {
     Minss, Maxss,
     Cvtsi2ss,         // xmm <- r/m32|64
     Cvttss2si,        // r32|64 <- xmm/m32 (truncation)
+    Cvtss2si,         // r32|64 <- xmm/m32 (MXCSR rounding)
     Cvtss2sd,         // f64 <- f32
     Ucomiss,          // compare, sets ZF/PF/CF
     Comiss,           // ordered compare (signaling-NaN), same flags as ucomiss
@@ -281,6 +282,7 @@ enum class Mnemonic : u16 {
     Minsd, Maxsd,
     Cvtsi2sd,
     Cvttsd2si,
+    Cvtsd2si,
     Cvtsd2ss,
     Ucomisd,          // 66 0F 2E
     Comisd,           // 66 0F 2F - ordered compare
@@ -389,7 +391,7 @@ enum class Mnemonic : u16 {
     X87Frndint, X87Fscale, X87Fsin, X87Fcos,
     X87Fcmovb, X87Fcmove, X87Fcmovbe, X87Fcmovu,
     X87Fcmovnb, X87Fcmovne, X87Fcmovnbe, X87Fcmovnu,
-    X87Fucompp, X87Fnclex, X87Fcomi, X87Fcomip, X87Ffree,
+    X87Fucompp, X87Fnclex, X87Fcomi, X87Fcomip, X87Ffreep, X87Ffree,
     Count,
 };
 

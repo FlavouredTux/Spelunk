@@ -393,6 +393,10 @@ bool lift_control(LiftCtx& ctx) {
         case Mnemonic::X87Fnclex:
         case Mnemonic::X87Ffree:
             return true;
+        case Mnemonic::X87Ffreep:
+            // Tagging st(i) empty has no value effect; the pop does.
+            pop(ctx);
+            return true;
         case Mnemonic::X87Fldcw:
             // Only the rounding of later fist/fistp depends on it.
             ctx.x87_control_word_loaded = true;

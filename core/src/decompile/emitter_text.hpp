@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -8,6 +10,7 @@
 #include <vector>
 
 #include <spelunk/common/types.hpp>
+#include <spelunk/decompile/emit_options.hpp>
 
 namespace spelunk::emit {
 
@@ -35,6 +38,12 @@ incomplete_c_export_reason(std::string_view text);
 [[nodiscard]] std::string replace_identifier(std::string_view text,
                                              std::string_view old_name,
                                              std::string_view new_name);
+// Rename every code token found in `names` (strings, comments and member
+// names after `.` / `->` stay as they are). Line-map hits from `first_hit`
+// on move with the text they point at.
+void rename_identifiers(std::string& text,
+                        const std::map<std::string, std::string, std::less<>>& names,
+                        LineMap* line_map, std::size_t first_hit);
 // SSA temporaries are useful internally, but `t57` carries no meaning in the
 // final decompilation. Give materialized PPC values stable, type-oriented
 // names. The numeric suffix is retained only when more than one value of the

@@ -253,6 +253,18 @@ Annotations::load(const std::filesystem::path& path) {
             out.field_names[FieldKey{addr, static_cast<std::size_t>(param), off}] =
                 std::string(name);
         }
+        else if (kind == "lvar") {
+            const std::size_t sp = rest.find(' ');
+            if (sp == std::string_view::npos) continue;
+            addr_t addr = 0;
+            if (!parse_hex_addr(rest.substr(0, sp), addr)) continue;
+            auto parts = split(trim(rest.substr(sp + 1)), '|');
+            if (parts.size() != 2) continue;
+            const std::string_view emitted = trim(parts[0]);
+            const std::string_view name = trim(parts[1]);
+            if (emitted.empty() || name.empty()) continue;
+            out.local_names[addr][std::string(emitted)] = std::string(name);
+        }
     }
 
     return out;
@@ -354,6 +366,11 @@ std::string Annotations::to_text() const {
     for (const auto& [key, name] : field_names) {
         out += std::format("field {:x} {:x}|{:#x}|{}\n",
                            key.function, key.param, key.offset, name);
+    }
+    for (const auto& [function, names] : local_names) {
+        for (const auto& [emitted, name] : names) {
+            out += std::format("lvar {:x} {}|{}\n", function, emitted, name);
+        }
     }
     return out;
 }

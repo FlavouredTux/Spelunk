@@ -119,6 +119,55 @@ std::string code_only_text(std::string_view text) {
 }
 
 
+void rename_identifiers(std::string& text,
+                        const std::map<std::string, std::string, std::less<>>& names,
+                        LineMap* line_map, std::size_t first_hit) {
+    if (names.empty()) return;
+    const std::string code = code_only_text(text);
+    struct Edit {
+        std::size_t        at = 0;
+        std::size_t        length = 0;
+        const std::string* name = nullptr;
+    };
+    std::vector<Edit> edits;
+    for (std::size_t pos = 0; pos < code.size();) {
+        if (!c_ident_char(code[pos])) {
+            ++pos;
+            continue;
+        }
+        const std::size_t begin = pos;
+        while (pos < code.size() && c_ident_char(code[pos])) ++pos;
+        if (std::isdigit(static_cast<unsigned char>(code[begin])) != 0) continue;
+        const auto found = names.find(std::string_view(code).substr(begin, pos - begin));
+        if (found == names.end()) continue;
+        if (begin >= 1 && code[begin - 1] == '.') continue;
+        if (begin >= 2 && code[begin - 2] == '-' && code[begin - 1] == '>') continue;
+        edits.push_back({begin, pos - begin, &found->second});
+    }
+    if (edits.empty()) return;
+    std::string renamed;
+    renamed.reserve(text.size());
+    std::size_t copied = 0;
+    for (const Edit& edit : edits) {
+        renamed.append(text, copied, edit.at - copied);
+        renamed += *edit.name;
+        copied = edit.at + edit.length;
+    }
+    renamed.append(text, copied);
+    if (line_map) {
+        for (std::size_t i = first_hit; i < line_map->hits.size(); ++i) {
+            std::size_t& offset = line_map->hits[i].byte_offset;
+            std::size_t moved = offset;
+            for (const Edit& edit : edits) {
+                if (edit.at >= offset) break;
+                moved = moved + edit.name->size() - edit.length;
+            }
+            offset = moved;
+        }
+    }
+    text = std::move(renamed);
+}
+
 std::string_view trim_line_view(std::string_view line) noexcept {
     while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
         line.remove_prefix(1);

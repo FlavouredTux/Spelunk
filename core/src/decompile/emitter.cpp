@@ -791,6 +791,14 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
         }
     }
 
+    // User names for locals, parameters and temporaries, by emitted name.
+    if (annotations) {
+        if (const auto names = annotations->local_names.find(start);
+            names != annotations->local_names.end()) {
+            rename_identifiers(out, names->second, options.line_map, 0);
+        }
+    }
+
     return out;
 }
 

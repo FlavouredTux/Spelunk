@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <memory>
 #include <string>
@@ -367,9 +368,72 @@ void test_nonempty_void_tail_probe_discards_scratch_hit() {
     check_all_offsets(*rendered, line_map);
 }
 
+// `lvar` renames change identifier lengths after the hits were recorded;
+// every hit must still land on its statement's line. The renamed names
+// sit in the signature and the conditions, ahead of every statement.
+void test_local_renames_keep_hits_on_their_lines() {
+    constexpr addr_t kFunction = 0x1000;
+    IrFunction function;
+    function.start = kFunction;
+    function.end = 0x1034;
+    function.name = "line_map_renamed";
+    Annotations annotations;
+    add_call_block(function, annotations, 0x1010, 0x2010, 0x3010, "nested_then_statement");
+    add_call_block(function, annotations, 0x1020, 0x2020, 0x3020, "nested_else_statement");
+    add_call_block(function, annotations, 0x1030, 0x2030, 0x3030, "outer_else_statement");
+    const auto body = [] {
+        auto nested = if_else(IrValue::make_reg(Reg::Rsi, IrType::I1), block_region(0x1010),
+                              block_region(0x1020));
+        return if_else(IrValue::make_reg(Reg::Rdi, IrType::I1), std::move(nested),
+                       block_region(0x1030));
+    };
+    const PseudoCEmitter emitter;
+    StructuredFunction plain{&function, body()};
+    auto before = emitter.emit(plain, nullptr, &annotations, {});
+    check(before.has_value(), "unrenamed pseudo-C emits");
+    if (!before) return;
+    // Rename whatever names the conditions read, to something longer.
+    for (const char* name : {"a1", "a2", "rdi", "rsi"}) {
+        if (before->find(name) != std::string::npos)
+            annotations.local_names[kFunction][name] = std::string(name) + "_renamed_longer";
+    }
+    check(annotations.local_names[kFunction].size() == 2, "the fixture has names to rename");
+    // A name in a comment is not a code token and stays as it is.
+    annotations.local_names[kFunction]["line_map_renamed"] = "not_in_code";
+
+    StructuredFunction structured{&function, body()};
+    LineMap line_map;
+    EmitOptions options;
+    options.line_map = &line_map;
+    auto rendered = emitter.emit(structured, nullptr, &annotations, options);
+    check(rendered.has_value(), "renamed pseudo-C emits");
+    if (!rendered) return;
+    for (const auto& [emitted, name] : annotations.local_names[kFunction]) {
+        if (emitted == "line_map_renamed") continue;
+        check(rendered->find(name) != std::string::npos, "lvar rename appears in the output");
+    }
+    check(rendered->find("not_in_code") == std::string::npos &&
+              rendered->find("// line_map_renamed") != std::string::npos,
+          "comments keep their text");
+    check_hit(*rendered, line_map, 0x2010, "nested_then_statement();");
+    check_hit(*rendered, line_map, 0x2020, "nested_else_statement();");
+    check_hit(*rendered, line_map, 0x2030, "outer_else_statement();");
+    check_all_offsets(*rendered, line_map);
+
+    // The records survive a save and load.
+    check(annotations.to_text().find("lvar 1000 ") != std::string::npos, "lvar records are written");
+    const auto path = std::filesystem::temp_directory_path() / "spelunk_lvar_roundtrip.annotations";
+    check(annotations.save(path).has_value(), "annotations save");
+    const auto loaded = Annotations::load(path);
+    std::filesystem::remove(path);
+    check(loaded.has_value() && loaded->local_names == annotations.local_names,
+          "lvar records load back unchanged");
+}
+
 }  // namespace
 
 int main() {
+    test_local_renames_keep_hits_on_their_lines();
     test_nested_if_else_and_early_return();
     test_swapped_empty_then_branch();
     test_while_header_chunk();

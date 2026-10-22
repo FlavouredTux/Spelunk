@@ -122,6 +122,7 @@ struct AnnotationMeta {
 //   note   <hex-addr>  <text>
 //   const  <hex-value> <name>
 //   field  <hex-addr>  <param-index>|<hex-offset>|<field-name>
+//   lvar   <hex-addr>  <emitted-name>|<new-name>
 //   meta   <kind> <hex-addr-or-value> conf=<float>|src=<tag>|ev=<text>
 //
 // Addresses are hex without a 0x prefix. The `const` record names a
@@ -129,6 +130,10 @@ struct AnnotationMeta {
 // runtime-resolver hash like `0xDEADBEEF` to the API it resolves to,
 // e.g. `kernel32!CreateFileW`. Per-version resolver hash tables
 // are dropped in via this record.
+//
+// `lvar` renames a name the pseudo-C emitter invents inside one function
+// (a local, parameter or temporary such as `local_28`, `a1`, `t17`),
+// keyed by the function's address and the name as emitted.
 //
 // `meta` carries provenance (confidence + evidence + source) for one
 // of the records above; `<kind>` is one of `rename`, `note`, `sig`.
@@ -146,6 +151,7 @@ struct Annotations {
     std::map<addr_t, std::string>  notes;
     std::map<u64,    std::string>  named_constants;
     std::map<FieldKey, std::string> field_names;
+    std::map<addr_t, std::map<std::string, std::string, std::less<>>> local_names;
     // Ephemeral type overlay populated by CLI header import. These are not
     // serialized into the annotation sidecar: the headers remain the source
     // of truth and are reparsed when --headers is requested.
@@ -201,6 +207,14 @@ struct Annotations {
                                       i64 offset) const noexcept {
         auto it = field_names.find(FieldKey{function, param, offset});
         return it == field_names.end() ? nullptr : &it->second;
+    }
+
+    const std::string* local_name_for(addr_t function,
+                                      std::string_view emitted) const noexcept {
+        auto fn = local_names.find(function);
+        if (fn == local_names.end()) return nullptr;
+        auto it = fn->second.find(emitted);
+        return it == fn->second.end() ? nullptr : &it->second;
     }
 
     const std::string* global_type_for(addr_t a) const noexcept {

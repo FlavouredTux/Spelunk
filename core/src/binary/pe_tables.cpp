@@ -32,6 +32,15 @@ constexpr std::size_t kExportDirSize       = 40;
     return static_cast<u64>(start) + size <= kRvaSpaceSize;
 }
 
+// A DLL name, which every imported symbol copies. Windows caps it at
+// MAX_PATH; anything longer is a malformed table, kept unattributed.
+[[nodiscard]] std::string_view
+library_name_at_rva(const Binary& bin, addr_t image_base, u32 rva) noexcept {
+    constexpr std::size_t kMaxLibraryName = 260;
+    const auto name = cstr_at_rva(bin, image_base, rva);
+    return name.size() > kMaxLibraryName ? std::string_view{} : name;
+}
+
 [[nodiscard]] std::optional<u32>
 add_rva(u32 base, std::size_t offset) noexcept {
     if (offset > std::numeric_limits<u32>::max() - base) {
@@ -159,7 +168,7 @@ collect_imports(const Binary& bin,
         const u32 int_rva = (oft_rva != 0) ? oft_rva : iat_rva;
         if (auto result = collect_thunks(
                 bin, image_base, int_rva, iat_rva, out, got_to_name,
-                oft_rva == 0, cstr_at_rva(bin, image_base, name_rva));
+                oft_rva == 0, library_name_at_rva(bin, image_base, name_rva));
             !result) {
             return result;
         }
@@ -221,7 +230,7 @@ collect_delay_imports(const Binary& bin,
 
         if (auto result = collect_thunks(
                 bin, image_base, int_rva, iat_rva, out, got_to_name,
-                false, cstr_at_rva(bin, image_base, name_rva));
+                false, library_name_at_rva(bin, image_base, name_rva));
             !result) {
             return result;
         }

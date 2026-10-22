@@ -253,8 +253,9 @@ void insert_phis(IrFunction& fn,
                 phi.op = IrOp::Phi;
                 if (var.kind == 0) {
                     const Reg canon = static_cast<Reg>(var.id);
-                    IrType type = is_ppc_fpr(canon) ? IrType::F64
-                                                    : type_for_bits(reg_size(canon) * 8);
+                    const bool x87 = canon >= Reg::St0 && canon <= Reg::St7;
+                    IrType type = is_ppc_fpr(canon) || x87
+                        ? IrType::F64 : type_for_bits(reg_size(canon) * 8);
                     const auto observed = observed_types.find(var);
                     const bool is_ppc_register =
                         canon >= Reg::PpcR0 && canon <= Reg::PpcF31;

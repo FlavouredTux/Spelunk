@@ -65,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix='spelunk-cli-batch-') as tmp:
     native = root / 'exports.so'
     subprocess.run([cc, '-shared', '-fPIC', str(repo / 'tests/support/export_regressions.S'),
                     '-o', str(native)], check=True, capture_output=True, timeout=30)
-    manifest.write_text('export_copy\nexport_x87_copy\nexport_undecoded\nexport_quotient\n')
+    manifest.write_text('export_copy\nexport_rdtsc\nexport_undecoded\nexport_quotient\n')
     for json_mode in (False, True):
         args = ['--no-cache', '--emit-c', '--symbols', manifest, native]
         result = run((['--json'] if json_mode else []) + args, status=1)

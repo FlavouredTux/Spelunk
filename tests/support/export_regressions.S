@@ -115,14 +115,13 @@ export_vprintf:
     jmp vprintf@PLT
 .size export_vprintf, .-export_vprintf
 
-.globl export_x87_copy
-.type export_x87_copy, @function
-export_x87_copy:
-    flds (%rsi)
-    fstps (%rdi)
+.globl export_rdtsc
+.type export_rdtsc, @function
+export_rdtsc:
+    rdtsc
     xor %eax, %eax
     ret
-.size export_x87_copy, .-export_x87_copy
+.size export_rdtsc, .-export_rdtsc
 
 .globl export_undecoded
 .type export_undecoded, @function

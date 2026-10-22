@@ -8,6 +8,7 @@
 #include <map>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <utility>
@@ -135,6 +136,7 @@ try_fold(const IrInst& inst) noexcept;
     std::span<const u32> /*dirty*/, std::vector<u32>& touched);
 
 [[nodiscard]] bool is_side_effect(IrOp op) noexcept;
+[[nodiscard]] bool is_pure_intrinsic(std::string_view name) noexcept;
 
 // ============================================================================
 // Pass: local GVN (intra-block value numbering)

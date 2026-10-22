@@ -3,6 +3,8 @@
 // Shared state and per-instruction lifters of the x86-64 lifter. Private
 // to the x64_lifter*.cpp translation units.
 
+#include <array>
+#include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -14,6 +16,32 @@
 #include <spelunk/ir/ssa.hpp>  // canonical_reg
 
 namespace spelunk::x64_lift {
+
+// An x87 compare has four outcomes for st(0) against its operand. Flags and
+// AH that derive from it are functions of the outcome, kept as truth tables
+// over these bits so conditions lower to one comparison of the operands.
+inline constexpr u8 kFpGreater   = 1;
+inline constexpr u8 kFpLess      = 2;
+inline constexpr u8 kFpEqual     = 4;
+inline constexpr u8 kFpUnordered = 8;
+
+// Which of FpOutcome's flag tables hold.
+inline constexpr u8 kFpZf = 1;
+inline constexpr u8 kFpCf = 2;
+inline constexpr u8 kFpSf = 4;
+inline constexpr u8 kFpOf = 8;
+inline constexpr u8 kFpPf = 16;
+
+struct FpOutcome {
+    IrValue a = {};  // st(0) and the operand it was compared with;
+    IrValue b = {};  // kind None when this block has no such compare
+    // AH per outcome (greater, less, equal, unordered) once `fnstsw ax`
+    // stored the condition codes; cleared by any other RAX write.
+    bool ah = false;
+    std::array<u8, 4> ah_image{};
+    u8 known = 0;  // kFp* flag bits; cleared by any other flag write
+    u8 zf = 0, cf = 0, sf = 0, of = 0, pf = 0;
+};
 
 // ah/bh/ch/dh - the upper 8 bits of the low 16.
 [[nodiscard]] constexpr bool is_high_byte(Reg r) noexcept {
@@ -57,6 +85,12 @@ struct LiftCtx {
     // from `last_flag_src`; SAHF restores it directly from AH, so carry that
     // one explicit i1 override until an instruction writes a fresh PF source.
     IrValue last_pf_value = {};
+
+    // x87 compare state for this block; see FpOutcome.
+    FpOutcome fp_outcome;
+    // fldcw ran earlier in this block. Compilers bracket fistp with a
+    // truncating control word to implement C casts.
+    bool x87_control_word_loaded = false;
 
     // Set by CDQ/CQO until the next write to RAX/RDX. Lets the immediately
     // following IDIV use `sext(rax/eax)` as its dividend instead of rebuilding
@@ -171,6 +205,7 @@ struct LiftCtx {
     }
 
     void emit_set_flag(Flag f, IrValue v) {
+        fp_outcome.known = 0;
         emit_assign(IrValue::make_flag(f), v);
     }
 
@@ -274,6 +309,7 @@ struct LiftCtx {
         if (canon == Reg::Rax || canon == Reg::Rdx) {
             last_signext_dividend_valid = false;
         }
+        if (canon == Reg::Rax) fp_outcome.ah = false;
 
         if (mode32() && canon >= Reg::Rax && canon <= Reg::Rdi) {
             IrValue dst = IrValue::make_reg(canon, IrType::I32);
@@ -359,6 +395,17 @@ void store_lvalue(const Operand& op, IrValue value, LiftCtx& ctx);
 // jcc_predicate is naturally placed next to the jcc/setcc family further
 // down. Decl up here lets us keep both groupings.
 [[nodiscard]] IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx);
+
+// x87 (x86_lifter_fp.cpp). The comparison of the FpOutcome operands that
+// holds on exactly the outcomes in `table`.
+[[nodiscard]] IrValue fp_outcome_predicate(LiftCtx& ctx, u8 table);
+// A jcc condition from the FpOutcome flag tables; nullopt when it reads a
+// flag that is not tabled.
+[[nodiscard]] std::optional<IrValue> fp_outcome_condition(Mnemonic jcc, LiftCtx& ctx);
+// Re-derives the flags of sahf, or of an AH test, mask or compare, when AH
+// holds an x87 compare's condition codes.
+void refine_fp_status_use(LiftCtx& ctx, const FpOutcome& before);
+bool lift_x86_fp(LiftCtx& ctx);
 void update_shift_parity(LiftCtx& ctx, IrValue result,
                          IrValue original_count, IrValue nonzero);
 

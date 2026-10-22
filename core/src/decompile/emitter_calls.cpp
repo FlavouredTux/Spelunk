@@ -68,7 +68,8 @@ bool can_defer_call_to_return(const IrFunction& fn,
 }  // namespace
 
 std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
-    if (!binary || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return std::nullopt;
+    if (!binary || (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_x86_32_abi(abi)))
+        return std::nullopt;
     if (auto it = fp_return_cache.find(target); it != fp_return_cache.end()) return it->second;
     auto& result = fp_return_cache[target];
     const auto* callee = lift_cached(callee_ir_cache(), *binary, target);
@@ -106,7 +107,25 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
         if (inst.src_count < 2) return result;
         const auto* integer = producer(inst.srcs[0]);
         const auto* floating = producer(inst.srcs[1]);
-        if (floating && floating->op == IrOp::Clobber) {
+        // x87 constants (fldz, fld1) reach the return as immediates.
+        if (!floating && is_x86_32_abi(abi)) {
+            IrValue value = inst.srcs[1];
+            while (const IrInst* copy = ssa_key(value) ? definitions[*ssa_key(value)] : nullptr) {
+                if (copy->op != IrOp::Assign || copy->src_count != 1) break;
+                value = copy->srcs[0];
+            }
+            if (value.kind == IrValueKind::Imm && is_float_type(value.type)) {
+                if (type && *type != value.type) return result;
+                type = value.type;
+                continue;
+            }
+        }
+        // Every x87 register is clobbered at a call; only st(0) carries
+        // what the callee returned.
+        const bool return_lane_clobber = floating && floating->op == IrOp::Clobber &&
+            (floating->dst.kind != IrValueKind::Reg ||
+             canonical_reg(floating->dst.reg) == canonical_reg(fp_return_reg(abi)));
+        if (return_lane_clobber) {
             std::optional<IrType> delegated;
             for (std::size_t i = 0; i < block.insts.size(); ++i) {
                 if (&block.insts[i] != floating) continue;
@@ -135,8 +154,10 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
             floating->op == IrOp::Clobber || !is_float_type(floating->dst.type)) return result;
         // A scalar FP calculation used only as the return, alongside an
         // integer scratch value already consumed by the body, identifies the
-        // FP lane even when address arithmetic happened to use RAX.
-        if (integer && integer->op != IrOp::Clobber &&
+        // FP lane even when address arithmetic happened to use RAX. x86
+        // needs no such evidence: its x87 stack must be empty on return
+        // unless the function returns a floating value.
+        if (!is_x86_32_abi(abi) && integer && integer->op != IrOp::Clobber &&
             (!body_uses(integer) || body_uses(floating))) return result;
         if (type && *type != floating->dst.type) return result;
         type = floating->dst.type;

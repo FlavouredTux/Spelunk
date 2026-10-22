@@ -18,12 +18,20 @@
 #include "x64_lifter_internal.hpp"
 
 namespace spelunk::x64_lift {
-bool lift_x86_fp(LiftCtx& ctx);
+namespace {
+void lift_instruction_body(LiftCtx& ctx);
+}  // namespace
 
 void lift_instruction(LiftCtx& ctx) {
+    if (is_x87(ctx.insn->mnemonic) && lift_x86_fp(ctx)) return;
+    const FpOutcome before = ctx.fp_outcome;
+    lift_instruction_body(ctx);
+    if (before.ah) refine_fp_status_use(ctx, before);
+}
+
+namespace {
+void lift_instruction_body(LiftCtx& ctx) {
     const auto& insn = *ctx.insn;
-    if (ctx.mode32() && insn.mnemonic >= Mnemonic::X87Fld &&
-        insn.mnemonic <= Mnemonic::X87Finit && lift_x86_fp(ctx)) return;
     switch (insn.mnemonic) {
         case Mnemonic::Mov:     lift_mov(ctx);     break;
         case Mnemonic::Movzx:   lift_movzx(ctx);   break;
@@ -452,6 +460,7 @@ void lift_instruction(LiftCtx& ctx) {
             break;
     }
 }
+}  // namespace
 
 void ensure_terminator(IrBlock& bb) {
     if (!bb.insts.empty() && is_terminator(bb.insts.back().op)) return;

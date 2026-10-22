@@ -80,14 +80,14 @@ def main():
         for line in run(['nm', '-D', '--defined-only', binary]).splitlines():
             address, _, name = line.split()
             addresses[name] = int(address, 16)
-        for name, reason in [('export_x87_copy', 'unresolved intrinsic'),
+        for name, reason in [('export_rdtsc', 'unresolved intrinsic'),
                              ('export_undecoded', 'undecoded control-flow target')]:
             result = subprocess.run([spelunk, '--no-cache', '--emit-c', '-s', name, str(binary)],
                                     capture_output=True, text=True, timeout=30)
             assert result.returncode == 1 and not result.stdout, (name, result)
             assert 'is incomplete:' in result.stderr and reason in result.stderr, (name, result.stderr)
-        pseudo = run([spelunk, '--no-cache', '-p', '-s', 'export_x87_copy', binary])
-        assert 'x64.fld' in pseudo and 'x64.fstp' in pseudo, pseudo
+        pseudo = run([spelunk, '--no-cache', '-p', '-s', 'export_rdtsc', binary])
+        assert 'x64.rdtsc' in pseudo, pseudo
         printf_plt = int(re.search(r'([0-9a-f]+) <vprintf@plt>:',
                                   run(['objdump', '-d', binary]))[1], 16)
         va_annotations = folder / 'va.anns'

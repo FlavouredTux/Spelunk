@@ -272,8 +272,12 @@ void Emitter::prepare_phi_copies() {
             return;
         for (const auto& inst : block.insts) {
             if (inst.op == IrOp::BranchIndirect) return;
+            // x87 registers are F64 containers here, as XMM registers are
+            // I128 ones on x86-64.
+            const bool x87_phi = inst.dst.kind == IrValueKind::Reg &&
+                inst.dst.reg >= Reg::St0 && inst.dst.reg <= Reg::St7;
             if (inst.op == IrOp::Phi &&
-                (is_float_type(inst.dst.type) ||
+                ((is_float_type(inst.dst.type) && !is_x86_32_abi(abi) && !x87_phi) ||
                  (type_bits(inst.dst.type) > 64 &&
                   (inst.dst.type != IrType::I128 || is_ppc_abi() || with_calls))) &&
                 (!with_calls || (ssa_key(inst.dst) && live.contains(*ssa_key(inst.dst))))) return;

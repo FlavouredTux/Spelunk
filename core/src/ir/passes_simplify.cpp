@@ -217,6 +217,8 @@ std::size_t pass_dce(
         // merely because shift lifting captured flags that later went dead.
         if (inst.op == IrOp::Intrinsic && inst.src_count == 0 &&
             (inst.name == "parity" || inst.name == "not_parity")) return false;
+        if (inst.op == IrOp::Intrinsic && inst.dst.kind != IrValueKind::None &&
+            is_pure_intrinsic(inst.name)) return false;
         return is_side_effect(inst.op);
     };
     for (std::size_t bi = 0; bi < fn.blocks.size(); ++bi) {

@@ -203,6 +203,9 @@ void lift_jmp(LiftCtx& ctx) {
 }
 
 IrValue jcc_predicate(Mnemonic mn, LiftCtx& ctx) {
+    if (ctx.fp_outcome.known) {
+        if (auto condition = fp_outcome_condition(mn, ctx)) return *condition;
+    }
     const IrValue zf = ctx.flag_val(Flag::Zf);
     const IrValue sf = ctx.flag_val(Flag::Sf);
     const IrValue cf = ctx.flag_val(Flag::Cf);

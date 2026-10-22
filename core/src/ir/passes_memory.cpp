@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include <spelunk/common/types.hpp>
@@ -35,6 +36,19 @@ bool is_side_effect(IrOp op) noexcept {
         default:
             return false;
     }
+}
+
+// Value-producing intrinsics with no effect beyond their result: FP compares,
+// conversions, libm functions and x87 state reads. DCE drops them unused.
+bool is_pure_intrinsic(std::string_view name) noexcept {
+    static constexpr std::string_view kPure[] = {
+        "unordered_fp_compare", "cvtsi2sd", "cvtss2sd", "cvtsd2ss", "cvttsd2si",
+        "sqrt", "fabs", "sin", "cos", "tan", "atan2", "fmod", "remainder",
+        "rint", "lrint", "llrint", "x87.f2xm1", "x87.fyl2x", "x87.fyl2xp1",
+        "x87.fscale", "x87.exponent", "x87.significand", "x87.load80", "x87.fbld",
+        "x87.control_word", "x87.status_word",
+    };
+    return std::ranges::find(kPure, name) != std::end(kPure);
 }
 
 bool gvn_eligible(IrOp op) noexcept {

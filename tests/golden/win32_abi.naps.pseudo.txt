@@ -1,0 +1,6 @@
+// _naps
+uint32_t _naps(void) {
+  Sleep(1);
+  Sleep(2);
+  return 0;
+}

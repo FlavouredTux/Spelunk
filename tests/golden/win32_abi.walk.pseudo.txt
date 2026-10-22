@@ -1,0 +1,18 @@
+// _walk
+extern void* _list_head;
+
+void _walk(void) {
+  void* ptr;
+  void* t6 = (void*)_list_head;
+  if (!t6) {
+    return;
+  }
+  ptr = t6;
+  do {
+    uint32_t t10 = ((uint32_t*)ptr)[0];
+    if (t10) {
+      ((uint32_t (*)(uint32_t))(((uint32_t*)ptr)[1]))(t10);
+    }
+    ptr = ((void**)ptr)[2];
+  } while (ptr);
+}

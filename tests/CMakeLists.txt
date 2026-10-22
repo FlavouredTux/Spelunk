@@ -813,8 +813,11 @@ spelunk_golden_test(
 
 # x87 values live on a register stack; the lifter tracks it by position so
 # loads, compares (fnstsw/sahf and fcomi), fldcw truncation and st0 returns
-# read as plain double arithmetic.
-foreach(_fn scale magnitude pick truncate forward after_calls merged_calls nothing)
+# read as plain double arithmetic. The rest pin stack arguments through
+# realigned frames and register-held imports, return types from st0, the
+# seed of a guarded rotated loop, and MSVC's SEH frame and inline memcpy.
+foreach(_fn scale magnitude pick truncate forward after_calls merged_calls nothing walk
+             guarded naps copy)
     spelunk_golden_test(
         NAME    win32_abi_${_fn}_pseudo
         FIXTURE win32_abi

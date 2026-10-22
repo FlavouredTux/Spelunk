@@ -1,0 +1,5 @@
+// _copy
+void _copy(uint32_t a1, uint32_t a2, uint32_t a3) {
+  memcpy(a1, a2, a3);
+  return;
+}

@@ -100,6 +100,9 @@ try_fold(const IrInst& inst) noexcept {
             case IrOp::Or:
                 if (ai && a.imm == 0) return b;
                 if (bi && b.imm == 0) return a;
+                // x | ~0 -> ~0: MSVC's `or eax, -1` for `eax = -1`.
+                if (ai && a.imm == -1) return a;
+                if (bi && b.imm == -1) return b;
                 if (same_ssa_value(a, b)) return a;
                 break;
             case IrOp::Xor:

@@ -76,6 +76,25 @@ int main() {
         check(signature && !signature->variadic && signature->params.size() == count,
               "exception runtime has a fixed ABI prototype");
     }
+    // Win32 API arities: on x86 they decide how much a stdcall callee pops.
+    for (const auto& [name, count] : {
+             std::pair{"GetVersion", 0u},
+             std::pair{"GetStartupInfoA", 1u},
+             std::pair{"FormatMessageA", 7u},
+             std::pair{"WideCharToMultiByte", 8u},
+             std::pair{"CreateProcessA", 10u},
+             std::pair{"CreateWindowExA", 12u},
+             std::pair{"StretchDIBits", 13u},
+             std::pair{"CreateFontA", 14u}}) {
+        const auto signature = spelunk::lookup_import_sig(name, arena, 32);
+        check(signature && !signature->variadic && signature->params.size() == count,
+              "Win32 API has its documented arity");
+    }
+    const auto wsprintf = spelunk::lookup_import_sig("wsprintfA", arena, 32);
+    check(wsprintf && wsprintf->variadic && wsprintf->params.size() == 2,
+          "wsprintfA is variadic after its buffer and format");
+    check(!spelunk::lookup_import_sig("socket", arena, 64),
+          "Berkeley socket names stay with their POSIX callers");
     const auto decorated_sleep = spelunk::lookup_import_sig(
         spelunk::strip_import_name_decorations("__imp__Sleep@4"), arena);
     check(decorated_sleep.has_value() && decorated_sleep->params.size() == 1,

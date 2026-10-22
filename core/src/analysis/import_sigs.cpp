@@ -1,6 +1,8 @@
 #include <spelunk/analysis/import_sigs.hpp>
 
+#include <algorithm>
 #include <cstddef>
+#include <iterator>
 #include <map>
 #include <optional>
 #include <string>
@@ -591,11 +593,222 @@ std::optional<ImportSigSpec> build(std::string_view name, TypeArena& a,
     return std::nullopt;
 }
 
+// Win32 APIs common in pre-2010 programs, as code strings: the return type,
+// then each parameter. v void, i int/BOOL/LONG, u DWORD/UINT, h WORD/ATOM/
+// SHORT, p HANDLE/HWND/LPVOID and struct pointers, s char*, w wchar_t*,
+// z SIZE_T/WPARAM/UINT_PTR/SOCKET, Z LPARAM/LRESULT/INT_PTR, U DWORD*;
+// a trailing `.` makes it variadic. Arity is what matters most: on x86 it
+// is how much a stdcall callee pops.
+struct Win32Sig {
+    std::string_view name;
+    std::string_view codes;
+};
+constexpr Win32Sig kWin32Sigs[] = {
+    // kernel32: process, environment, console
+    {"GetVersion", "u"}, {"GetVersionExA", "ip"}, {"GetVersionExW", "ip"},
+    {"GetStartupInfoA", "vp"}, {"GetStartupInfoW", "vp"},
+    {"GetCommandLineA", "s"}, {"GetCommandLineW", "w"},
+    {"GetEnvironmentStrings", "s"}, {"GetEnvironmentStringsA", "s"},
+    {"GetEnvironmentStringsW", "w"}, {"FreeEnvironmentStringsA", "is"},
+    {"FreeEnvironmentStringsW", "iw"}, {"GetEnvironmentVariableA", "ussu"},
+    {"GetEnvironmentVariableW", "uwwu"}, {"SetEnvironmentVariableA", "iss"},
+    {"SetEnvironmentVariableW", "iww"}, {"GetStdHandle", "pu"}, {"SetStdHandle", "iup"},
+    {"GetModuleFileNameA", "upsu"}, {"GetModuleFileNameW", "upwu"},
+    {"LoadLibraryExA", "pspu"}, {"LoadLibraryExW", "pwpu"},
+    {"DisableThreadLibraryCalls", "ip"}, {"SetErrorMode", "uu"},
+    {"CreateProcessA", "issppiupspp"}, {"CreateProcessW", "iwwppiupwpp"},
+    {"GetExitCodeProcess", "ipU"}, {"DuplicateHandle", "ippppuiu"},
+    {"FormatMessageA", "uupuusup"}, {"FormatMessageW", "uupuuwup"},
+    {"Beep", "iuu"}, {"MulDiv", "iiii"}, {"IsProcessorFeaturePresent", "iu"},
+    {"EncodePointer", "pp"}, {"DecodePointer", "pp"},
+    {"UnhandledExceptionFilter", "ip"}, {"RtlUnwind", "vpppp"},
+    {"RaiseException", "vuuup"}, {"GetComputerNameA", "isU"},
+    {"GetComputerNameW", "iwU"}, {"SetHandleCount", "uu"},
+    // kernel32: files
+    {"CreateFileA", "psuupuup"}, {"CreateFileW", "pwuupuup"},
+    {"ReadFile", "ippuUp"}, {"WriteFile", "ippuUp"}, {"GetFileType", "up"},
+    {"SetFilePointer", "upipu"}, {"GetFileSize", "upU"}, {"FlushFileBuffers", "ip"},
+    {"SetEndOfFile", "ip"}, {"DeleteFileA", "is"}, {"DeleteFileW", "iw"},
+    {"CopyFileA", "issi"}, {"MoveFileA", "iss"}, {"CreateDirectoryA", "isp"},
+    {"CreateDirectoryW", "iwp"}, {"RemoveDirectoryA", "is"},
+    {"GetFileAttributesA", "us"}, {"GetFileAttributesW", "uw"},
+    {"SetFileAttributesA", "isu"}, {"FindFirstFileA", "psp"}, {"FindFirstFileW", "pwp"},
+    {"FindNextFileA", "ipp"}, {"FindNextFileW", "ipp"}, {"FindClose", "ip"},
+    {"GetCurrentDirectoryA", "uus"}, {"GetCurrentDirectoryW", "uuw"},
+    {"SetCurrentDirectoryA", "is"}, {"SetCurrentDirectoryW", "iw"},
+    {"GetTempPathA", "uus"}, {"GetTempFileNameA", "ussus"},
+    {"GetWindowsDirectoryA", "usu"}, {"GetSystemDirectoryA", "usu"},
+    {"GetFullPathNameA", "ususp"}, {"GetShortPathNameA", "ussu"},
+    {"GetDriveTypeA", "us"}, {"GetLogicalDrives", "u"},
+    {"GetVolumeInformationA", "issuUUUsu"}, {"DeviceIoControl", "ipupupuUp"},
+    {"CreateFileMappingA", "pppuuus"}, {"MapViewOfFile", "ppuuuz"},
+    {"UnmapViewOfFile", "ip"},
+    {"GetPrivateProfileStringA", "ussssus"}, {"GetPrivateProfileIntA", "ussis"},
+    {"WritePrivateProfileStringA", "issss"},
+    // kernel32: memory
+    {"HeapCreate", "puzz"}, {"HeapDestroy", "ip"}, {"HeapReAlloc", "ppupz"},
+    {"HeapSize", "zpup"}, {"HeapValidate", "ipup"}, {"GlobalAlloc", "puz"},
+    {"GlobalFree", "pp"}, {"GlobalLock", "pp"}, {"GlobalUnlock", "ip"},
+    {"GlobalReAlloc", "ppzu"}, {"GlobalSize", "zp"}, {"GlobalMemoryStatus", "vp"},
+    {"LocalAlloc", "puz"}, {"LocalFree", "pp"}, {"VirtualQuery", "zppz"},
+    {"IsBadReadPtr", "ipz"}, {"IsBadWritePtr", "ipz"}, {"IsBadCodePtr", "ip"},
+    // kernel32: threads and synchronisation
+    {"InitializeCriticalSection", "vp"}, {"EnterCriticalSection", "vp"},
+    {"LeaveCriticalSection", "vp"}, {"DeleteCriticalSection", "vp"},
+    {"TryEnterCriticalSection", "ip"}, {"InitializeCriticalSectionAndSpinCount", "ipu"},
+    {"TlsAlloc", "u"}, {"TlsGetValue", "pu"}, {"TlsSetValue", "iup"}, {"TlsFree", "iu"},
+    {"InterlockedIncrement", "ip"}, {"InterlockedDecrement", "ip"},
+    {"InterlockedExchange", "ipi"}, {"InterlockedExchangeAdd", "ipi"},
+    {"InterlockedCompareExchange", "ipii"},
+    {"CreateThread", "ppzppuU"}, {"ResumeThread", "up"}, {"SuspendThread", "up"},
+    {"GetExitCodeThread", "ipU"}, {"TerminateThread", "ipu"},
+    {"SetThreadPriority", "ipi"}, {"GetThreadPriority", "ip"},
+    {"CreateEventA", "ppiis"}, {"CreateEventW", "ppiiw"}, {"SetEvent", "ip"},
+    {"ResetEvent", "ip"}, {"CreateMutexA", "ppis"}, {"CreateMutexW", "ppiw"},
+    {"ReleaseMutex", "ip"}, {"CreateSemaphoreA", "ppiis"}, {"ReleaseSemaphore", "ipip"},
+    {"WaitForMultipleObjects", "uupiu"},
+    // kernel32: time
+    {"QueryPerformanceCounter", "ip"}, {"QueryPerformanceFrequency", "ip"},
+    {"GetSystemTimeAsFileTime", "vp"}, {"GetSystemTime", "vp"}, {"GetLocalTime", "vp"},
+    {"GetTimeZoneInformation", "up"}, {"FileTimeToSystemTime", "ipp"},
+    {"FileTimeToLocalFileTime", "ipp"}, {"SystemTimeToFileTime", "ipp"},
+    {"GetSystemInfo", "vp"},
+    // kernel32: code pages and strings
+    {"GetACP", "u"}, {"GetOEMCP", "u"}, {"GetCPInfo", "iup"}, {"IsValidCodePage", "iu"},
+    {"MultiByteToWideChar", "iuusiwi"}, {"WideCharToMultiByte", "iuuwisisp"},
+    {"LCMapStringA", "iuusisi"}, {"LCMapStringW", "iuuwiwi"},
+    {"GetStringTypeA", "iuusip"}, {"GetStringTypeW", "iuwip"},
+    {"CompareStringA", "iuusisi"}, {"CompareStringW", "iuuwiwi"},
+    {"GetLocaleInfoA", "iuusi"}, {"GetLocaleInfoW", "iuuwi"},
+    {"GetUserDefaultLCID", "u"}, {"GetThreadLocale", "u"},
+    {"lstrlenA", "is"}, {"lstrlenW", "iw"}, {"lstrcpyA", "sss"}, {"lstrcpyW", "www"},
+    {"lstrcpynA", "sssi"}, {"lstrcatA", "sss"}, {"lstrcmpA", "iss"}, {"lstrcmpiA", "iss"},
+    // user32: windows and messages
+    {"CreateWindowExA", "pussuiiiipppp"}, {"CreateWindowExW", "puwwuiiiipppp"},
+    {"DestroyWindow", "ip"}, {"ShowWindow", "ipi"}, {"UpdateWindow", "ip"},
+    {"MoveWindow", "ipiiiii"}, {"SetWindowPos", "ippiiiiu"},
+    {"DefWindowProcA", "ZpuzZ"}, {"DefWindowProcW", "ZpuzZ"},
+    {"CallWindowProcA", "ZppuzZ"}, {"CallWindowProcW", "ZppuzZ"},
+    {"RegisterClassA", "hp"}, {"RegisterClassW", "hp"}, {"RegisterClassExA", "hp"},
+    {"RegisterClassExW", "hp"}, {"UnregisterClassA", "isp"},
+    {"GetMessageA", "ippuu"}, {"GetMessageW", "ippuu"}, {"PeekMessageA", "ippuuu"},
+    {"PeekMessageW", "ippuuu"}, {"TranslateMessage", "ip"}, {"DispatchMessageA", "Zp"},
+    {"DispatchMessageW", "Zp"}, {"PostQuitMessage", "vi"},
+    {"SendMessageA", "ZpuzZ"}, {"SendMessageW", "ZpuzZ"}, {"PostMessageA", "ipuzZ"},
+    {"PostMessageW", "ipuzZ"}, {"SetWindowTextA", "ips"}, {"SetWindowTextW", "ipw"},
+    {"GetWindowTextA", "ipsi"}, {"GetWindowTextW", "ipwi"},
+    {"SetWindowLongA", "ipii"}, {"GetWindowLongA", "ipi"},
+    {"SetWindowLongW", "ipii"}, {"GetWindowLongW", "ipi"},
+    {"GetClientRect", "ipp"}, {"GetWindowRect", "ipp"}, {"ClientToScreen", "ipp"},
+    {"ScreenToClient", "ipp"}, {"AdjustWindowRect", "ipui"}, {"AdjustWindowRectEx", "ipuiu"},
+    {"InvalidateRect", "ippi"}, {"ValidateRect", "ipp"},
+    {"GetDesktopWindow", "p"}, {"GetForegroundWindow", "p"}, {"SetForegroundWindow", "ip"},
+    {"GetActiveWindow", "p"}, {"SetActiveWindow", "pp"}, {"SetFocus", "pp"}, {"GetFocus", "p"},
+    {"SetCapture", "pp"}, {"ReleaseCapture", "i"},
+    {"DialogBoxParamA", "ZpsppZ"}, {"EndDialog", "ipZ"}, {"GetDlgItem", "ppi"},
+    {"SetDlgItemTextA", "ipis"}, {"GetDlgItemTextA", "upisi"},
+    {"wsprintfA", "iss."}, {"wsprintfW", "iww."},
+    // user32: resources, input, display
+    {"LoadIconA", "pps"}, {"LoadCursorA", "pps"}, {"LoadIconW", "ppw"}, {"LoadCursorW", "ppw"},
+    {"LoadImageA", "ppsuiiu"}, {"LoadBitmapA", "pps"}, {"LoadStringA", "ipusi"},
+    {"LoadStringW", "ipuwi"},
+    {"GetDC", "pp"}, {"GetWindowDC", "pp"}, {"ReleaseDC", "ipp"},
+    {"BeginPaint", "ppp"}, {"EndPaint", "ipp"},
+    {"SetTimer", "zpzup"}, {"KillTimer", "ipz"},
+    {"GetAsyncKeyState", "hi"}, {"GetKeyState", "hi"},
+    {"SetCursor", "pp"}, {"ShowCursor", "ii"}, {"GetCursorPos", "ip"},
+    {"SetCursorPos", "iii"}, {"ClipCursor", "ip"},
+    {"GetSystemMetrics", "ii"}, {"SystemParametersInfoA", "iuupu"}, {"MessageBeep", "iu"},
+    {"EnumDisplaySettingsA", "isup"}, {"ChangeDisplaySettingsA", "ipu"},
+    {"CharUpperA", "ss"}, {"CharLowerA", "ss"}, {"CharNextA", "ss"},
+    {"OpenClipboard", "ip"}, {"CloseClipboard", "i"},
+    // gdi32
+    {"SelectObject", "ppp"}, {"DeleteObject", "ip"}, {"DeleteDC", "ip"},
+    {"CreateCompatibleDC", "pp"}, {"CreateCompatibleBitmap", "ppii"},
+    {"BitBlt", "ipiiiipiiu"}, {"StretchBlt", "ipiiiipiiiiu"}, {"GetStockObject", "pi"},
+    {"SetTextColor", "upu"}, {"SetBkColor", "upu"}, {"SetBkMode", "ipi"},
+    {"TextOutA", "ipiisi"}, {"CreateFontA", "piiiiiuuuuuuuus"},
+    {"CreateSolidBrush", "pu"}, {"CreatePen", "piiu"}, {"SetPixel", "upiiu"},
+    {"GetPixel", "upii"}, {"Rectangle", "ipiiii"}, {"Ellipse", "ipiiii"},
+    {"MoveToEx", "ipiip"}, {"LineTo", "ipii"}, {"GetDeviceCaps", "ipi"},
+    {"CreateDIBSection", "pppuppu"}, {"StretchDIBits", "ipiiiiiiiippuu"},
+    {"RealizePalette", "up"}, {"SelectPalette", "pppi"}, {"CreatePalette", "pp"},
+    {"GetObjectA", "ipip"}, {"SwapBuffers", "ip"}, {"ChoosePixelFormat", "ipp"},
+    {"SetPixelFormat", "ipip"}, {"DescribePixelFormat", "ipiup"},
+    // advapi32
+    {"RegOpenKeyExA", "ipsuup"}, {"RegOpenKeyExW", "ipwuup"}, {"RegOpenKeyA", "ipsp"},
+    {"RegQueryValueExA", "ipsUUpU"}, {"RegQueryValueExW", "ipwUUpU"},
+    {"RegSetValueExA", "ipsuupu"}, {"RegSetValueExW", "ipwuupu"},
+    {"RegCreateKeyExA", "ipsusuuppU"}, {"RegCreateKeyA", "ipsp"},
+    {"RegDeleteKeyA", "ips"}, {"RegDeleteValueA", "ips"}, {"RegCloseKey", "ip"},
+    {"GetUserNameA", "isU"}, {"GetUserNameW", "iwU"},
+    // winmm
+    {"timeGetTime", "u"}, {"timeBeginPeriod", "uu"}, {"timeEndPeriod", "uu"},
+    {"PlaySoundA", "ispu"}, {"mciSendStringA", "ussup"},
+    // ws2_32. The Berkeley names (socket, send, ...) are left out: they
+    // collide with POSIX imports, whose types differ.
+    {"WSAStartup", "ihp"}, {"WSACleanup", "i"}, {"WSAGetLastError", "i"},
+    {"closesocket", "iz"}, {"ioctlsocket", "iziU"},
+};
+
+consteval bool valid_win32_sigs() {
+    for (const auto& sig : kWin32Sigs) {
+        std::string_view codes = sig.codes;
+        if (codes.ends_with('.')) codes.remove_suffix(1);
+        if (codes.empty()) return false;
+        for (std::size_t i = 0; i < codes.size(); ++i) {
+            if (std::string_view("viuhpswzZU").find(codes[i]) == std::string_view::npos)
+                return false;
+            if (i > 0 && codes[i] == 'v') return false;
+        }
+    }
+    return true;
+}
+static_assert(valid_win32_sigs(), "malformed Win32 signature code");
+
+std::optional<ImportSigSpec>
+win32_sig(std::string_view name, TypeArena& a, unsigned pointer_bits) {
+    const auto* found = std::ranges::find(kWin32Sigs, name, &Win32Sig::name);
+    if (found == std::end(kWin32Sigs)) return std::nullopt;
+    const auto size_bits = static_cast<u8>(pointer_bits);
+    const auto type_for = [&](char code) -> std::optional<TypeRef> {
+        switch (code) {
+            case 'v': return t_void(a);
+            case 'i': return t_int32s(a);
+            case 'u': return t_int32u(a);
+            case 'h': return t_int16u(a);
+            case 'p': return t_voidp(a);
+            case 's': return t_charp(a);
+            case 'w': return t_u16p(a);
+            case 'z': return t_int(a, size_bits, false);
+            case 'Z': return t_int(a, size_bits, true);
+            case 'U': return a.ptr_t(t_int32u(a));
+            default: return std::nullopt;
+        }
+    };
+    ImportSigSpec spec;
+    std::string_view codes = found->codes;
+    if (codes.ends_with('.')) {
+        spec.variadic = true;
+        codes.remove_suffix(1);
+    }
+    bool first = true;
+    for (const char code : codes) {
+        const auto type = type_for(code);
+        if (!type) return std::nullopt;
+        if (first) spec.ret = *type;
+        else spec.params.push_back(*type);
+        first = false;
+    }
+    return spec;
+}
+
 }  // namespace
 
 std::optional<ImportSigSpec>
 lookup_import_sig(std::string_view name, TypeArena& arena, unsigned pointer_bits) {
-    return build(name, arena, pointer_bits);
+    if (auto spec = build(name, arena, pointer_bits)) return spec;
+    return win32_sig(name, arena, pointer_bits);
 }
 
 ImportStringKind import_arg_string_kind(std::string_view name,

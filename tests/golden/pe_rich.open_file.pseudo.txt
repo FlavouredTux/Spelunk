@@ -2,7 +2,7 @@
 uint64_t sub_1800010c0(void) {
   uint64_t local_18;
   uint64_t local_10;
-  uint64_t local_8;
+  void* local_8;
   local_18 = 3;
   local_10 = 0;
   local_8 = 0;

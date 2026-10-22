@@ -603,6 +603,22 @@ std::string Emitter::format_store(const IrInst& inst) const {
     if (inst.src_count < 2) return "";
     const auto& addr = inst.srcs[0];
     const auto& val  = inst.srcs[1];
+    // An SEH frame's try level says which __try block is active.
+    if (seh_try_level && !options.c_source && inst.segment == Reg::None &&
+        entry_stack_offset(addr) == seh_try_level) {
+        if (const auto level = resolve_imm(val)) {
+            if (inst.source_addr == seh_frame_store) {
+                const auto name = [&](const std::optional<u64>& at) {
+                    return at ? function_display_name(static_cast<addr_t>(*at))
+                              : std::string("?");
+                };
+                return std::format("/* SEH frame: handler {}, scope table {:#x} */",
+                                   name(seh_handler), seh_scope_table.value_or(0));
+            }
+            if (*level < 0) return "/* leave __try */";
+            return std::format("/* __try level {} */", *level);
+        }
+    }
     if (options.c_source && inst.segment == Reg::None && !stack_offset(addr)) {
         const std::string value = (is_float_type(val.type) || type_bits(val.type) > 64) ? expr(val)
             : std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val));
@@ -680,6 +696,108 @@ std::string Emitter::format_store(const IrInst& inst) const {
     return std::format("{} = {};", lhs, rhs);
 }
 
+namespace {
+
+// Bytes per element of a REP MOVS/STOS intrinsic; 0 for anything else.
+u64 rep_string_element(std::string_view name) noexcept {
+    if (!name.starts_with("rep.movs") && !name.starts_with("rep.stos")) return 0;
+    switch (name.back()) {
+        case 'b': return 1;
+        case 'w': return 2;
+        case 'd': return 4;
+        case 'q': return 8;
+        default:  return 0;
+    }
+}
+
+}  // namespace
+
+// MSVC inlines memcpy/memset of n bytes as `rep movsd` of n >> 2 dwords and
+// then `rep movsb` of the n & 3 bytes left. Returns the tail's index after
+// the head at `index`, with nothing observable between them.
+std::optional<std::size_t>
+Emitter::rep_string_tail(const IrBlock& block, std::size_t index) const {
+    const IrInst& head = block.insts[index];
+    const u64 element = rep_string_element(head.name);
+    if (element <= 1 || head.src_count < 3) return std::nullopt;
+    const IrInst* split = def_stripped(head.srcs[2]);
+    if (!split || split->op != IrOp::Lshr || split->src_count < 2 ||
+        resolve_imm(split->srcs[1]) != std::countr_zero(element)) return std::nullopt;
+    const auto whole = [&](const IrValue& value) -> std::optional<SsaKey> {
+        const IrInst* d = def_stripped(value);
+        return d ? ssa_key(d->dst) : ssa_key(value);
+    };
+    const auto total = whole(split->srcs[0]);
+    if (!total) return std::nullopt;
+    const std::string tail_name = std::format("{}b", head.name.substr(0, head.name.size() - 1));
+    for (std::size_t i = index + 1; i < block.insts.size(); ++i) {
+        const IrInst& inst = block.insts[i];
+        if (inst.op == IrOp::Intrinsic) {
+            if (inst.name != tail_name || inst.src_count < 3) return std::nullopt;
+            const IrInst* rest = def_stripped(inst.srcs[2]);
+            if (!rest || rest->op != IrOp::And || rest->src_count < 2 ||
+                resolve_imm(rest->srcs[1]) != static_cast<i64>(element - 1) ||
+                whole(rest->srcs[0]) != total) return std::nullopt;
+            return i;
+        }
+        if (inst.op == IrOp::Store || inst.op == IrOp::Call ||
+            inst.op == IrOp::CallIndirect || is_terminator(inst.op)) return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+// `rep movs` / `rep stos` as the memcpy / memset they perform.
+std::optional<std::string> Emitter::render_rep_string_statement(const IrInst& inst) const {
+    const u64 element = rep_string_element(inst.name);
+    if (!element || inst.src_count < 3 || !fn) return std::nullopt;
+    const IrBlock* block = nullptr;
+    std::size_t index = 0;
+    for (const auto& bb : fn->blocks) {
+        if (bb.insts.empty() || &inst < &bb.insts.front() || &inst > &bb.insts.back()) continue;
+        block = &bb;
+        index = static_cast<std::size_t>(&inst - bb.insts.data());
+    }
+    if (!block) return std::nullopt;
+    const bool fill = inst.name.starts_with("rep.stos");
+    // A fill value replicated into every byte is a memset; others are not.
+    std::optional<std::string> fill_byte;
+    if (fill) {
+        if (element == 1) {
+            fill_byte = expr(inst.srcs[1]);
+        } else if (auto value = resolve_imm(inst.srcs[1])) {
+            const u64 bits = static_cast<u64>(*value) & (element == 8 ? ~u64{0}
+                : (u64{1} << (element * 8)) - 1);
+            const u64 low = bits & 0xff;
+            u64 splat = 0;
+            for (u64 i = 0; i < element; ++i) splat |= low << (i * 8);
+            if (splat == bits) fill_byte = format_numeric_imm(IrValue::make_imm(static_cast<i64>(low), IrType::I32));
+        }
+        if (!fill_byte) return std::nullopt;
+    }
+    if (element == 1 && index > 0) {
+        // The tail of a merged pair renders with its head.
+        for (std::size_t i = index; i-- > 0;) {
+            const IrInst& prior = block->insts[i];
+            if (prior.op != IrOp::Intrinsic) continue;
+            if (rep_string_tail(*block, i) == index) return std::string{};
+            break;
+        }
+    }
+    std::string bytes;
+    if (auto tail = rep_string_tail(*block, index)) {
+        bytes = expr(def_stripped(inst.srcs[2])->srcs[0]);
+    } else if (auto count = resolve_imm(inst.srcs[2])) {
+        bytes = format_numeric_imm(IrValue::make_imm(
+            static_cast<i64>(static_cast<u64>(*count) * element), IrType::I32));
+    } else if (element == 1) {
+        bytes = expr(inst.srcs[2]);
+    } else {
+        bytes = std::format("{} * {}", expr(inst.srcs[2], 0, std::to_underlying(Prec::Mul)), element);
+    }
+    if (fill) return std::format("memset({}, {}, {});", expr(inst.srcs[0]), *fill_byte, bytes);
+    return std::format("memcpy({}, {}, {});", expr(inst.srcs[0]), expr(inst.srcs[1]), bytes);
+}
+
 std::string Emitter::format_stmt(const IrInst& inst) const {
     if (auto name = merge_assignment_name_for(inst)) {
         return format_merge_assignment(inst, *name);
@@ -716,7 +834,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                     if (all <= vis) return "";
                 }
                 return std::format("{} = {};",
-                                   reg_name(inst.dst.reg), expr(inst.srcs[0]));
+                                   display_reg_name(inst.dst.reg), expr(inst.srcs[0]));
             }
             if (inst.dst.kind == IrValueKind::Flag) {
                 if (use_count(inst.dst) == 0) return "";
@@ -790,6 +908,9 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // into the structured branch.
                 return "";
             }
+            if (!options.c_source && inst.dst.kind == IrValueKind::None) {
+                if (auto memory = render_rep_string_statement(inst)) return *memory;
+            }
             // If the intrinsic produces a value that survives downstream,
             // bind it to a named temp so subsequent reads have something
             // to refer to. Otherwise emit as a void statement.
@@ -802,7 +923,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
             }
             if (inst.dst.kind == IrValueKind::Reg &&
                 visible_use_count(inst.dst) > 0) {
-                return std::format("{} = {};", reg_name(inst.dst.reg), call);
+                return std::format("{} = {};", display_reg_name(inst.dst.reg), call);
             }
             if (inst.dst.kind == IrValueKind::Flag && use_count(inst.dst) > 0) {
                 return std::format("{} = {};", flag_name(inst.dst.flag), call);

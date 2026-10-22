@@ -2,6 +2,6 @@
 extern uint64_t buf;
 
 void block_copy(const char* src) {
-  rep.movsq(&buf /* 0x405040 */, src, 8);
+  memcpy(&buf /* 0x405040 */, src, 0x40);
   return;
 }

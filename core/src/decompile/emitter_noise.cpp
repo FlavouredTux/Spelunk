@@ -85,6 +85,7 @@ void Emitter::analyze_abi_noise() {
             }
         }
     }
+    if (is_x86_32_abi(abi)) analyze_seh_frame();
     // Pass 2: propagate. A pure temp whose every use is in a hidden inst is itself dead.
     //
     // The phase-one SSA index lets each fixpoint iteration touch O(uses)
@@ -124,6 +125,56 @@ void Emitter::analyze_abi_noise() {
             }
         }
     }
+}
+
+// An x86 SEH frame. MSVC links an EXCEPTION_REGISTRATION into fs:[0] on
+// entry - `push -1; push scope_table; push handler; push fs:[0];
+// mov fs:[0], esp` - saves esp below it for the handler, and unlinks it on
+// exit. The record is runtime plumbing: hide it, keep the try level (the
+// record's last field), and say which handler and scope table it names.
+void Emitter::analyze_seh_frame() {
+    const auto is_fs_head = [](const IrInst& inst) {
+        return inst.segment == Reg::Fs && inst.src_count >= 1 &&
+               inst.srcs[0].kind == IrValueKind::Imm && inst.srcs[0].imm == 0;
+    };
+    std::optional<i64> record;
+    for (const auto& bb : fn->blocks) {
+        for (const auto& inst : bb.insts) {
+            if (inst.op != IrOp::Store || inst.src_count < 2 || !is_fs_head(inst)) continue;
+            if (auto offset = entry_stack_offset(inst.srcs[1])) record = offset;
+        }
+    }
+    if (!record) return;
+    for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+        const auto& bb = fn->blocks[bi];
+        for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+            const auto& inst = bb.insts[ii];
+            if ((inst.op == IrOp::Store || inst.op == IrOp::Load) && is_fs_head(inst)) {
+                hidden.insert({bi, ii});
+                continue;
+            }
+            if (inst.op != IrOp::Store || inst.src_count < 2 || inst.segment != Reg::None)
+                continue;
+            const auto offset = entry_stack_offset(inst.srcs[0]);
+            if (!offset) continue;
+            const i64 field = *offset - *record;
+            // The prologue's `push -1` opens the frame at try level -1.
+            if (field == 12 && bb.start == fn->start &&
+                (!seh_frame_store || inst.source_addr < *seh_frame_store)) {
+                seh_frame_store = inst.source_addr;
+            }
+            if (field == 4 || field == 8) {
+                if (auto value = resolve_imm(inst.srcs[1]))
+                    (field == 4 ? seh_handler : seh_scope_table) = static_cast<u64>(*value);
+            }
+            // prev, handler, scope table; and the esp saved for the handler.
+            if (field == 0 || field == 4 || field == 8 ||
+                (field == -8 && entry_stack_offset(inst.srcs[1]))) {
+                hidden.insert({bi, ii});
+            }
+        }
+    }
+    seh_try_level = *record + 12;
 }
 
 bool Emitter::is_stack_chk_guard_got_load(const IrInst& inst) const {

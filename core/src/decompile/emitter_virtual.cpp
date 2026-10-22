@@ -167,7 +167,7 @@ Emitter::render_ppc_virtual_call(const IrInst& call, const CallArgPack& pack) co
     std::string arguments;
     const auto append = [&](const IrValue& value, Reg lane) {
         if (!arguments.empty()) arguments += ", ";
-        arguments += std::format("/* {} */ {}", reg_name(lane), expr(value));
+        arguments += std::format("/* {} */ {}", display_reg_name(lane), expr(value));
         result.used_args.push_back(value);
     };
     const auto selected = [&](const IrValue& value, Reg lane) {

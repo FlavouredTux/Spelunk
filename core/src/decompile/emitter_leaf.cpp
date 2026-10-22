@@ -250,9 +250,9 @@ std::string Emitter::render_reg_leaf(Reg r, u32 version,
         if (auto it = merge_value_names.find(k); it != merge_value_names.end()) {
             return it->second;
         }
-        return std::format("{}_{}", reg_name(r), version);
+        return std::format("{}_{}", display_reg_name(r), version);
     }
-    return std::string(reg_name(r));
+    return std::string(display_reg_name(r));
 }
 
 std::string Emitter::function_display_name(addr_t target) const {

@@ -129,7 +129,7 @@ std::optional<std::string> Emitter::fallback_ssa_name(const IrValue& v) const {
     switch (v.kind) {
         case IrValueKind::Reg:
             if (v.version == 0) return std::nullopt;
-            return std::format("{}_{}", reg_name(v.reg), v.version);
+            return std::format("{}_{}", display_reg_name(v.reg), v.version);
         case IrValueKind::Temp:
             return std::format("t{}", v.temp);
         default:
@@ -143,8 +143,16 @@ void Emitter::mark_binding_emitted(const IrValue& v) const {
 
 bool Emitter::renders_raw_arch_reg_name(const IrValue& v) const {
     if (v.kind != IrValueKind::Reg || v.version == 0) return false;
-    const std::string raw = std::format("{}_{}", reg_name(v.reg), v.version);
+    const std::string raw = std::format("{}_{}", display_reg_name(v.reg), v.version);
     return expr(v, 1, 0) == raw;
+}
+
+std::string_view Emitter::display_reg_name(Reg r) const noexcept {
+    if (is_x86_32_abi(abi) && r >= Reg::Rax && r <= Reg::Rdi) {
+        return reg_name(static_cast<Reg>(static_cast<unsigned>(Reg::Eax) +
+                                         (static_cast<unsigned>(r) - static_cast<unsigned>(Reg::Rax))));
+    }
+    return reg_name(r);
 }
 
 std::optional<std::string>
@@ -413,7 +421,36 @@ void Emitter::emit_materializations_for_rendered_value(const IrValue& v,
 
 std::optional<i64>
 Emitter::entry_stack_offset(const IrValue& v, int depth) const {
-    if (depth > 16) return std::nullopt;
+    if (depth > 1024) {
+        entry_offset_capped = true;
+        return std::nullopt;
+    }
+    const auto key = ssa_key(v);
+    if (!key) return entry_stack_offset_uncached(v, depth);
+    if (entry_offset_memo_fn != fn) {
+        entry_offset_memo.clear();
+        entry_offset_deferred.clear();
+        entry_offset_memo_fn = fn;
+    }
+    if (auto memo = entry_offset_memo.find(*key); memo != entry_offset_memo.end()) {
+        return memo->second;
+    }
+    const bool outer_assumed = entry_offset_assumed;
+    const bool outer_capped = entry_offset_capped;
+    entry_offset_assumed = false;
+    entry_offset_capped = false;
+    const auto result = entry_stack_offset_uncached(v, depth);
+    if (!entry_offset_capped) {
+        if (entry_offset_assumed) entry_offset_deferred.emplace_back(*key, result);
+        else entry_offset_memo.emplace(*key, result);
+    }
+    entry_offset_assumed = entry_offset_assumed || outer_assumed;
+    entry_offset_capped = entry_offset_capped || outer_capped;
+    return result;
+}
+
+std::optional<i64>
+Emitter::entry_stack_offset_uncached(const IrValue& v, int depth) const {
     if (v.kind == IrValueKind::Reg) {
         if (!is_stack_base_reg(v.reg)) {
             const IrInst* d = def_of(v);
@@ -477,8 +514,10 @@ Emitter::entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int dept
     if (!key) return std::nullopt;
     if (auto assumed = stack_phi_assumptions.find(*key);
         assumed != stack_phi_assumptions.end()) {
+        entry_offset_assumed = true;
         return assumed->second;
     }
+    const std::size_t deferred_mark = entry_offset_deferred.size();
     stack_phi_assumptions.emplace(*key, std::nullopt);
     std::optional<i64> agreed;
     std::vector<const IrValue*> deferred;
@@ -494,12 +533,26 @@ Emitter::entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int dept
         agreed = offset;
     }
     if (agreed && consistent && !deferred.empty()) {
+        // What the first pass derived from the unset assumption is stale.
+        entry_offset_deferred.resize(deferred_mark);
         stack_phi_assumptions[*key] = agreed;
         for (const IrValue* operand : deferred) {
             if (entry_stack_offset(*operand, depth + 1) != agreed) consistent = false;
         }
     }
     stack_phi_assumptions.erase(*key);
+    // Values derived under a refuted assumption are wrong; ones derived
+    // under a confirmed one settle when no outer assumption remains.
+    if (!consistent) {
+        entry_offset_deferred.resize(deferred_mark);
+    } else if (stack_phi_assumptions.empty()) {
+        if (!entry_offset_capped) {
+            for (auto& [deferred_key, offset] : entry_offset_deferred)
+                entry_offset_memo.emplace(deferred_key, offset);
+        }
+        entry_offset_deferred.clear();
+    }
+    if (stack_phi_assumptions.empty()) entry_offset_assumed = false;
     return consistent ? agreed : std::nullopt;
 }
 
@@ -508,9 +561,13 @@ std::optional<i64> Emitter::stack_offset(const IrValue& v, int depth) const {
     if (v.kind == IrValueKind::Reg) {
         if (is_stack_base_reg(v.reg)) {
             // Optimized code may use RBP as an induction variable. A merged
-            // register value is not evidence of a fixed frame base.
-            if (const auto* definition = def_of(v); definition && definition->op == IrOp::Phi)
-                return std::nullopt;
+            // register value is not evidence of a fixed frame base - unless
+            // it is the stack pointer and every path agrees on its offset,
+            // as after branches that push and pop.
+            if (const auto* definition = def_of(v); definition && definition->op == IrOp::Phi) {
+                if (canonical_reg(v.reg) != Reg::Rsp) return std::nullopt;
+                return entry_stack_offset(v);
+            }
             return 0;
         }
         return std::nullopt;

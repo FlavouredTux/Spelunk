@@ -542,8 +542,13 @@ void Emitter::analyze(const IrFunction& f) {
             }
         }
     };
-    for (const auto& bb : f.blocks) {
-        for (const auto& inst : bb.insts) {
+    for (std::size_t bi = 0; bi < f.blocks.size(); ++bi) {
+        const auto& bb = f.blocks[bi];
+        for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
+            const auto& inst = bb.insts[ii];
+            // Hidden ABI plumbing (an SEH frame saving esp for its handler)
+            // does not hand a stack address to the source program.
+            if (hidden.contains({bi, ii})) continue;
             if (transports_pointer(inst.op) && ssa_key(inst.dst)) continue;
             if (inst.op == IrOp::Phi) continue;
             // Recording RSP at a call does not pass a pointer to the callee.
@@ -565,12 +570,31 @@ void Emitter::analyze(const IrFunction& f) {
         }
     }
 
+    // MSVC cleans up a cdecl call's argument with `pop ecx`. That reload
+    // only reaches the next call's register lane; it does not read the slot.
+    const auto feeds_only_call_lanes = [&](const IrInst& load) {
+        if (!is_x86_32_abi(abi)) return false;
+        std::set<SsaKey> visited;
+        const auto lanes_only = [&](this const auto& self, const IrValue& value) -> bool {
+            const auto key = ssa_key(value);
+            if (!key) return false;
+            if (!visited.insert(*key).second) return true;
+            const auto users = ssa_uses.syntactic_user_positions(*key);
+            return !users.empty() && std::ranges::all_of(users, [&](const auto& at) {
+                const IrInst& user = f.blocks[at.first].insts[at.second];
+                if (user.op == IrOp::Phi) return self(user.dst);
+                return SsaUseIndex::is_call_arg_barrier(user);
+            });
+        };
+        return lanes_only(load.dst);
+    };
     // Keep the existing set as the single format_store query: an explicit
     // load and an escaped address both make the slot's stored value observable.
     for (const auto& bb : f.blocks) {
         for (const auto& inst : bb.insts) {
             if (inst.op != IrOp::Load || inst.src_count < 1) continue;
             if (inst.segment != Reg::None) continue;
+            if (feeds_only_call_lanes(inst)) continue;
             if (auto off = stack_offset(inst.srcs[0]); off) {
                 const u32 bytes = std::max(
                     1u, type_bits(inst.dst.type) / 8u);

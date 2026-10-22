@@ -216,10 +216,16 @@ Emitter::args_for_layout(const std::vector<InferredArgument>& layout,
     }
     const auto int_regs = int_arg_regs(is_x86_32_abi(abi) ? Abi::Win32Fastcall : abi);
     const auto fp_regs = fp_arg_regs(abi);
+    if (is_x86_32_abi(abi)) pack.consumed_stack = pack.consumed_stack.value_or(0);
     for (const auto& arg : layout) {
         if (arg.stack_offset) {
             if (is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64) {
                 const i64 first = is_x86_32_abi(abi) ? 4 : (abi == Abi::SysVAmd64 ? 8 : 40);
+                if (is_x86_32_abi(abi)) {
+                    const i64 bytes = std::max<i64>(type_bits(arg.type) / 8, 4);
+                    pack.consumed_stack = std::max(*pack.consumed_stack,
+                                                   *arg.stack_offset - first + bytes);
+                }
                 const auto at = std::ranges::find(pack.stack_offsets,
                                                   *arg.stack_offset - first);
                 IrValue value;
@@ -731,7 +737,10 @@ Emitter::render_direct_call(const IrInst& inst, std::size_t call_index,
         direct_call_arity(inst, import_name, direct_name, call_args, annotated_sig);
     if (layout_arity) arity = layout_arity;
     std::vector<IrValue> used_args;
-    const bool trim_unproven_registers = !objc_sized && !annotated_sig;
+    // A prototype's arity is authoritative: a value in its argument
+    // register is the argument, even when it renders as a raw register.
+    const bool trim_unproven_registers = !objc_sized && !annotated_sig &&
+        !(import_name && has_fixed_import_prototype(*import_name));
     std::string args = arity
         ? format_call_args_with_arity(call_args, *arity,
                                       trim_unproven_registers,
@@ -774,6 +783,10 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
         // No PLT address here, so user-sig lookup can't key off one.
         auto arity = objc_call_arity(*name, indirect_args);
         const bool objc_sized = arity.has_value();
+        // An IAT call (`call [rip+slot]`) has no PLT stub to key a signature
+        // off, so ask the prototype table by name.
+        const bool prototype_sized = !arity && has_fixed_import_prototype(*name);
+        if (prototype_sized) arity = import_arity(0, *name);
         if (!arity) arity = libc_arity_by_name(*name);
         if (!arity) {
             if (auto fi = variadic_format_index(*name); fi) {
@@ -781,7 +794,8 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
             }
         }
         const std::string args = arity
-            ? format_call_args_with_arity(indirect_args, *arity, !objc_sized,
+            ? format_call_args_with_arity(indirect_args, *arity,
+                                          !objc_sized && !prototype_sized,
                                           &used_args, &rendered_indirect_args)
             : format_call_args_fallback(indirect_args, &used_args);
         if (options.c_source) note_c_call(inst, *name, used_args);
@@ -868,7 +882,8 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
                             : std::string(c_type_name(layout[i].type));
                     }
                     if (types.empty()) types = "void";
-                    const std::string ret = known_call_return_c_type(inst).value_or("uint64_t");
+                    const std::string ret = known_call_return_c_type(inst).value_or(
+                        std::string(default_call_return_c_type()));
                     const std::string indirect = expr(inst.srcs[0]);
                     if (const auto* object = global_object_for_load(inst.srcs[0])) {
                         note_global_decl(*object, std::format("{} (*{})({})", ret, object->name, types));
@@ -879,7 +894,14 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
         }
         if (auto virtual_call = render_ppc_virtual_call(inst, pack)) return *virtual_call;
         if (auto virtual_call = render_x64_virtual_call(inst, pack)) return *virtual_call;
-        const std::string args = format_call_args_fallback(pack.ints,
+        // An unknown x86-32 callee takes what was pushed for it since the
+        // previous call, after any register (thiscall/fastcall) lanes.
+        std::vector<IrValue> fallback_args = pack.ints;
+        if (is_x86_32_abi(abi)) {
+            fallback_args.insert(fallback_args.end(), pack.stack.begin(),
+                                 pack.stack.begin() + static_cast<std::ptrdiff_t>(pack.fresh_stack));
+        }
+        const std::string args = format_call_args_fallback(fallback_args,
                                                            &used_args);
         // Virtual-method-dispatch shape recognition: when the
         // call target traces back as `Load(Add(Load(<recv>), K))`
@@ -897,8 +919,9 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
             const std::string slot_expr = format_numeric_imm(
                 IrValue::make_imm(static_cast<i64>(*slot), IrType::I64));
             call_expr = std::format(
-                "(*(uint64_t (**)({})){})({}) /* unresolved indirect: fnptr slot @ {} */",
-                fallback_call_arg_types(pack.ints),
+                "(*({} (**)({})){})({}) /* unresolved indirect: fnptr slot @ {} */",
+                default_call_return_c_type(),
+                fallback_call_arg_types(fallback_args),
                 slot_expr,
                 args,
                 slot_expr);
@@ -910,7 +933,7 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
                 expr(inst.srcs[0], 0, std::to_underlying(Prec::Postfix));
             if (const Symbol* s = global_object_for_load(inst.srcs[0]);
                 s && tgt == s->name) {
-                note_global_decl(*s, std::format("uint64_t (*{})()", s->name));
+                note_global_decl(*s, std::format("{} (*{})()", default_call_return_c_type(), s->name));
             }
             if (!tgt.empty() && tgt.front() == '*') {
                 call_expr = std::format("(*{})({})", expr(inst.srcs[0]), args);
@@ -919,8 +942,8 @@ Emitter::render_indirect_call(const IrInst& inst, std::size_t call_index,
                 if (!target_type.ends_with('*') &&
                     target_type.find("(*") == std::string::npos) {
                     call_expr = std::format(
-                        "((uint64_t (*)({}))({}))({})",
-                        fallback_call_arg_types(pack.ints), tgt, args);
+                        "(({} (*)({}))({}))({})", default_call_return_c_type(),
+                        fallback_call_arg_types(fallback_args), tgt, args);
                 } else {
                     call_expr = std::format("{}({})", tgt, args);
                 }
@@ -1025,38 +1048,74 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
         }
     };
 
-    std::map<i64, std::pair<i64, IrValue>> recent_stack_stores;
+    struct StackStore {
+        i64 width;
+        IrValue value;
+        std::size_t epoch;  // calls seen before this store
+    };
+    std::map<i64, StackStore> recent_stack_stores;
+    std::size_t call_epoch = 0;
+    // A call consumes the argument words it read. Words above them stay:
+    // MSVC pushes an outer call's arguments around an inner call
+    // (`push a; push b; push 0; call GetModuleHandleA; push eax; call f`).
+    const auto retire_call_stores = [&](const CallArgPack& consumed) {
+        ++call_epoch;
+        if (!is_x86_32_abi(abi) || !consumed.stack_base) {
+            recent_stack_stores.clear();
+            return;
+        }
+        i64 extent = 0;
+        if (consumed.consumed_stack) {
+            extent = *consumed.consumed_stack;
+        } else if (consumed.fresh_stack) {
+            const std::size_t last = consumed.fresh_stack - 1;
+            extent = consumed.stack_offsets[last] + 4;
+        }
+        const i64 limit = *consumed.stack_base + extent;
+        std::erase_if(recent_stack_stores, [&](const auto& stored) {
+            return stored.first < limit;
+        });
+    };
     for (std::size_t ii = 0; ii < bb.insts.size(); ++ii) {
         const auto& inst = bb.insts[ii];
+        // Register saves are not arguments, however close to the call.
         if ((is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64) &&
-            inst.op == IrOp::Store && inst.src_count >= 2) {
+            inst.op == IrOp::Store && inst.src_count >= 2 &&
+            !hidden.contains({block_index, ii})) {
             if (auto offset = entry_stack_offset(inst.srcs[0])) {
                 const i64 width = static_cast<i64>(type_bits(inst.srcs[1].type) / 8);
                 std::erase_if(recent_stack_stores, [&](const auto& stored) {
-                    return stored.first < *offset + width && *offset < stored.first + stored.second.first;
+                    return stored.first < *offset + width && *offset < stored.first + stored.second.width;
                 });
                 // A narrow argument may store only its low bytes into the
                 // slot (`mov word ptr [esp], ax`); it still owns the word.
                 if (width == 1 || width == 2 || width == 4 || width == 8)
-                    recent_stack_stores[*offset] = {width, inst.srcs[1]};
+                    recent_stack_stores[*offset] = {width, inst.srcs[1], call_epoch};
             }
         }
         if (inst.op == IrOp::Intrinsic && inst.name == "call.stack_pointer") {
             pack.stack.clear();
             pack.stack_offsets.clear();
+            pack.stack_base.reset();
+            pack.fresh_stack = 0;
+            pack.consumed_stack.reset();
             if (inst.src_count && (is_x86_32_abi(abi) || abi == Abi::SysVAmd64 || abi == Abi::Win64)) {
                 if (auto offset = entry_stack_offset(inst.srcs[0])) {
                     if (abi == Abi::Win64) *offset += 32;
+                    pack.stack_base = *offset;
                     // Walk the stores by width: an 8-byte argument on x86-32
                     // covers two parameter words.
                     const i64 word = is_x86_32_abi(abi) ? 4 : 8;
                     i64 cursor = 0;
+                    bool fresh = true;
                     for (std::size_t i = 0; i < kMaxAbiArgs - int_arg_regs(abi).size(); ++i) {
                         auto found = recent_stack_stores.find(*offset + cursor);
                         if (found == recent_stack_stores.end()) break;
-                        pack.stack.push_back(found->second.second);
+                        pack.stack.push_back(found->second.value);
                         pack.stack_offsets.push_back(cursor);
-                        cursor += std::max(found->second.first, word);
+                        fresh = fresh && found->second.epoch == call_epoch;
+                        if (fresh) ++pack.fresh_stack;
+                        cursor += std::max(found->second.width, word);
                     }
                 }
             }
@@ -1083,6 +1142,7 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             if (inst.op == IrOp::Call || inst.op == IrOp::CallIndirect) {
                 pack.clear();
                 recent_stack_stores.clear();
+                ++call_epoch;
             }
             continue;
         }
@@ -1134,8 +1194,8 @@ void Emitter::emit_block(addr_t block_addr, int depth, std::string& out) const {
             for (const auto& a : call.used_args) {
                 emit_materializations_for_value(a, 0, out, ind);
             }
+            retire_call_stores(pack);
             pack.clear();
-            recent_stack_stores.clear();
             emit_call_binding(out, ind, std::pair{block_index, ii}, call.expr,
                               call_inst_returns_void(inst));
             continue;
@@ -1283,7 +1343,7 @@ void Emitter::emit_block_terminator(const IrBlock& bb, int depth,
         case BlockKind::Switch: {
             if (bb.switch_index != Reg::None) {
                 append_terminator(std::format(
-                    "switch ({})", reg_name(bb.switch_index)));
+                    "switch ({})", display_reg_name(bb.switch_index)));
             } else {
                 append_terminator("switch (?)");
             }

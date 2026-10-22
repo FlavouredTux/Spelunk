@@ -869,6 +869,14 @@ struct Emitter {
     // Detect prologue/epilogue noise: saves/restores of callee-saved regs, rsp/rbp
     // frame manipulation, plus any temps whose uses are entirely within hidden insts.
     void analyze_abi_noise();
+    void analyze_seh_frame();
+    void emit_loop_entry_assignments(const Region& r, int depth, std::string& out) const;
+    // x86 SEH frame found by analyze_seh_frame: the try-level slot's entry
+    // offset and the handler / scope table the registration names.
+    std::optional<i64> seh_try_level;
+    std::optional<u64> seh_handler;
+    std::optional<u64> seh_scope_table;
+    std::optional<addr_t> seh_frame_store;  // the prologue's try-level store
 
     [[nodiscard]] bool is_stack_chk_guard_got_load(const IrInst& inst) const;
 
@@ -948,6 +956,18 @@ struct Emitter {
     void mark_binding_emitted(const IrValue& v) const;
 
     [[nodiscard]] bool renders_raw_arch_reg_name(const IrValue& v) const;
+    // The register's name as the target's code spells it: IR carries
+    // canonical 64-bit GPRs, which x86-32 output shows as eax..edi.
+    [[nodiscard]] std::string_view display_reg_name(Reg r) const noexcept;
+    // Return type of a call nothing describes: the target's word.
+    [[nodiscard]] bool has_fixed_import_prototype(std::string_view name) const {
+        TypeArena arena;
+        const auto spec = lookup_import_sig(name, arena, import_pointer_bits());
+        return spec && !spec->variadic;
+    }
+    [[nodiscard]] std::string_view default_call_return_c_type() const noexcept {
+        return is_x86_32_abi(abi) ? "uint32_t" : "uint64_t";
+    }
 
     [[nodiscard]] std::optional<std::string>
     merge_assignment_name_for(const IrInst& inst) const;
@@ -984,10 +1004,25 @@ struct Emitter {
     entry_stack_offset(const IrValue& v, int depth = 0) const;
     [[nodiscard]] std::optional<i64>
     entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int depth) const;
+    [[nodiscard]] std::optional<i64>
+    entry_stack_offset_uncached(const IrValue& v, int depth) const;
     [[nodiscard]] static bool is_stack_realignment(const IrInst& d);
+    [[nodiscard]] std::optional<std::size_t>
+    rep_string_tail(const IrBlock& block, std::size_t index) const;
+    [[nodiscard]] std::optional<std::string>
+    render_rep_string_statement(const IrInst& inst) const;
     // Stack-pointer phis being resolved, with the offset each is assumed
     // to hold while its back edges are checked.
     mutable std::map<SsaKey, std::optional<i64>> stack_phi_assumptions;
+    // Settled entry offsets: push-built argument chains run hundreds of
+    // values deep, and every store and call asks. A result that leaned on
+    // a loop phi's assumption waits in `entry_offset_deferred` until the
+    // outermost phi confirms it; one that hit the depth cap never settles.
+    mutable std::map<SsaKey, std::optional<i64>> entry_offset_memo;
+    mutable std::vector<std::pair<SsaKey, std::optional<i64>>> entry_offset_deferred;
+    mutable const IrFunction* entry_offset_memo_fn = nullptr;
+    mutable bool entry_offset_assumed = false;
+    mutable bool entry_offset_capped = false;
 
     // Trace a value back through Add/Sub/Assign chains to see if it's stack-relative.
     [[nodiscard]] std::optional<i64> stack_offset(const IrValue& v, int depth = 0) const;
@@ -1328,9 +1363,17 @@ struct Emitter {
         std::vector<IrValue> fps;    // call.fp_args.N packs
         std::vector<IrValue> stack;  // contiguous, explicitly stored x64 arguments
         std::vector<i64> stack_offsets;  // byte offset of each, from the first
+        std::optional<i64> stack_base;   // entry offset of the call's stack pointer
+        // Leading `stack` entries stored since the previous call: the
+        // arguments pushed for this one when nothing else says how many.
+        std::size_t fresh_stack = 0;
+        // Bytes of `stack` a callee layout consumed; empty when no layout
+        // was applied.
+        mutable std::optional<i64> consumed_stack;
         bool have_pending = false;
         void clear() {
             ints.clear(); fps.clear(); stack.clear(); stack_offsets.clear();
+            stack_base.reset(); fresh_stack = 0; consumed_stack.reset();
             have_pending = false;
         }
     };

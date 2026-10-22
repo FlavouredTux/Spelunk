@@ -47,10 +47,16 @@ bool Emitter::prepare_scalar_join_copies() {
     if (!fn || (abi != Abi::SysVAmd64 && abi != Abi::Win64)) return false;
     const bool cyclic_phi = has_cyclic_phi(*fn);
     std::set<SsaKey> visiting;
+    // Every answer is remembered, not only float ones: phi diamonds reach
+    // the same values along many paths. The walk follows only Assign and
+    // Phi, so a value that reaches a cycle is nullopt from any entry and
+    // caching it cannot depend on where the walk started.
+    std::map<SsaKey, std::optional<IrType>> known;
     const auto scalar_type = [&](auto&& self, const IrValue& value) -> std::optional<IrType> {
         const auto key = ssa_key(value);
         if (key) {
             if (auto it = scalar_join_types.find(*key); it != scalar_join_types.end()) return it->second;
+            if (auto it = known.find(*key); it != known.end()) return it->second;
             if (!visiting.insert(*key).second) return std::nullopt;
         }
         const auto* definition = def_of(value);
@@ -85,6 +91,7 @@ bool Emitter::prepare_scalar_join_copies() {
         if (key) {
             visiting.erase(*key);
             if (type && is_float_type(*type)) scalar_join_types.emplace(*key, *type);
+            known.emplace(*key, type);
         }
         return type;
     };

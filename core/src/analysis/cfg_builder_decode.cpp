@@ -1,6 +1,7 @@
 #include "cfg_builder_internal.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <optional>
 #include <vector>
 
@@ -120,14 +121,47 @@ struct BoundGuess {
 detect_bound(const std::map<addr_t, Instruction>& insns,
              const std::set<addr_t>& leaders,
              addr_t jmp_addr,
-             Reg /*index_reg_hint*/) {
+             Reg index_reg_hint) {
+    auto it = insns.find(jmp_addr);
+    if (it == insns.end() || it == insns.begin()) return std::nullopt;
+
+    // `cmp rX, N; jbe table_block` guards from a predecessor anywhere in the
+    // function: in range, it branches to the block holding the jump; out of
+    // range, it falls through to the default. Match the branch by its
+    // target, and the compared register by the table index.
+    auto start = it;
+    for (int i = 0; i < 16 && !leaders.contains(start->first) && start != insns.begin(); ++i) {
+        const auto previous = std::prev(start);
+        if (previous->first + previous->second.length != start->first) break;
+        start = previous;
+    }
+    if (leaders.contains(start->first) && index_reg_hint != Reg::None) {
+        const Reg want = canonical_reg(index_reg_hint);
+        for (auto branch = std::next(insns.begin()); branch != insns.end(); ++branch) {
+            const Instruction& jbe = branch->second;
+            if ((jbe.mnemonic != Mnemonic::Jbe && jbe.mnemonic != Mnemonic::Jb) ||
+                jbe.num_operands < 1 || jbe.operands[0].kind != Operand::Kind::Relative ||
+                jbe.operands[0].rel.target != start->first) continue;
+            const Instruction& cmp = std::prev(branch)->second;
+            if (cmp.mnemonic != Mnemonic::Cmp || cmp.num_operands != 2 ||
+                cmp.address + cmp.length != jbe.address ||
+                cmp.operands[0].kind != Operand::Kind::Register ||
+                cmp.operands[1].kind != Operand::Kind::Immediate ||
+                canonical_reg(cmp.operands[0].reg) != want) continue;
+            const auto n = static_cast<u32>(cmp.operands[1].imm.value);
+            BoundGuess g;
+            g.index_reg = cmp.operands[0].reg;
+            g.count = jbe.mnemonic == Mnemonic::Jbe ? n + 1 : n;
+            g.default_tgt = jbe.address + jbe.length;
+            return g;
+        }
+    }
+
     // Walk backward from the jmp, scanning up to ~48 instructions (spanning
     // predecessor blocks is fine - we ignore control flow for this heuristic).
     // Match `cmp rX, N` immediately followed by `ja/jae target`; the
     // register name doesn't need to equal the jmp's index register because
     // the compiler often moves it through one or two aliases.
-    auto it = insns.find(jmp_addr);
-    if (it == insns.end() || it == insns.begin()) return std::nullopt;
 
     std::vector<const Instruction*> recent;
     recent.reserve(48);
@@ -150,11 +184,37 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
         if (cmp->num_operands != 2) continue;
         const auto& a = cmp->operands[0];
         const auto& b = cmp->operands[1];
-        if (a.kind != Operand::Kind::Register) continue;
         if (b.kind != Operand::Kind::Immediate) continue;
+        Reg index = a.reg;
+        if (a.kind == Operand::Kind::Memory) {
+            // `cmp byte ptr [rbx + 0x26d], 5; ja` compares the selector in
+            // memory; it is the bound only if that same memory is then
+            // loaded into the register the table is indexed with. The reload
+            // may go through a copy of the base (`mov r12, rdi`).
+            index = Reg::None;
+            for (std::size_t j = i; j-- > 0 && index == Reg::None;) {
+                const Instruction* load = recent[j];
+                if ((load->mnemonic != Mnemonic::Mov && load->mnemonic != Mnemonic::Movzx) ||
+                    load->num_operands != 2 ||
+                    load->operands[0].kind != Operand::Kind::Register ||
+                    load->operands[1].kind != Operand::Kind::Memory) continue;
+                const Mem& m = load->operands[1].mem;
+                const bool same_base = m.base == a.mem.base ||
+                    (index_reg_hint != Reg::None &&
+                     canonical_reg(load->operands[0].reg) == canonical_reg(index_reg_hint));
+                if (same_base && m.index == a.mem.index && m.scale == a.mem.scale &&
+                    m.disp == a.mem.disp && m.size == a.mem.size && m.segment == a.mem.segment &&
+                    m.base != Reg::Rip) {
+                    index = load->operands[0].reg;
+                }
+            }
+            if (index == Reg::None) continue;
+        } else if (a.kind != Operand::Kind::Register) {
+            continue;
+        }
 
         BoundGuess g;
-        g.index_reg = a.reg;
+        g.index_reg = index;
         const auto n = static_cast<u32>(b.imm.value);
         // ja:  idx > N  → default → valid range 0..N   → count = N+1
         // jae: idx >= N → default → valid range 0..N-1 → count = N
@@ -163,8 +223,30 @@ detect_bound(const std::map<addr_t, Instruction>& insns,
         if (ja->num_operands >= 1 && ja->operands[0].kind == Operand::Kind::Relative) {
             g.default_tgt = ja->operands[0].rel.target;
         }
-        (void)leaders;
         return g;
+    }
+
+    // `and rX, 7` masks the index into range with no compare at all, as in
+    // OpenSSL's tail-byte switches. It bounds the table only if nothing
+    // between the mask and the jump writes the register again.
+    if (index_reg_hint != Reg::None) {
+        const Reg want = canonical_reg(index_reg_hint);
+        for (const Instruction* in : recent) {
+            if (in->num_operands < 1 || in->operands[0].kind != Operand::Kind::Register ||
+                canonical_reg(in->operands[0].reg) != want ||
+                in->mnemonic == Mnemonic::Cmp || in->mnemonic == Mnemonic::Test) continue;
+            if (in->mnemonic == Mnemonic::And && in->num_operands == 2 &&
+                in->operands[1].kind == Operand::Kind::Immediate) {
+                const auto mask = static_cast<u64>(in->operands[1].imm.value);
+                if (mask > 0 && mask < 4096 && std::has_single_bit(mask + 1)) {
+                    BoundGuess g;
+                    g.index_reg = in->operands[0].reg;
+                    g.count = static_cast<u32>(mask + 1);
+                    return g;
+                }
+            }
+            break;
+        }
     }
     return std::nullopt;
 }

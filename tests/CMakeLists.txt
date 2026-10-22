@@ -203,6 +203,10 @@ add_executable(spelunk_raw_regions_test raw_regions_test.cpp)
 target_link_libraries(spelunk_raw_regions_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME raw_regions_unit COMMAND spelunk_raw_regions_test)
 
+add_executable(spelunk_jump_table_bound_test jump_table_bound_test.cpp)
+target_link_libraries(spelunk_jump_table_bound_test PRIVATE spelunk::core spelunk::flags)
+add_test(NAME jump_table_bound_unit COMMAND spelunk_jump_table_bound_test)
+
 add_executable(spelunk_recover_imports_test recover_imports_test.cpp)
 target_link_libraries(spelunk_recover_imports_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME recover_imports_unit COMMAND spelunk_recover_imports_test)

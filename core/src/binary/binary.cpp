@@ -48,7 +48,16 @@ const Binary::LookupCaches& Binary::caches() const {
         return a->size < b->size;
     };
     std::ranges::sort(c.imports_by_addr, by_addr_name_size);
-    std::ranges::sort(c.defined_objects_by_addr, by_addr_name_size);
+    // A linker section marker (`__data_start__`, `__bss_start__`) shares its
+    // address with the first real object there; that object's own name wins.
+    const auto section_marker = [](const Symbol* s) noexcept {
+        return s->name.size() > 4 && s->name.starts_with("__") && s->name.ends_with("__");
+    };
+    std::ranges::sort(c.defined_objects_by_addr, [&](const Symbol* a, const Symbol* b) noexcept {
+        if (a->addr != b->addr) return a->addr < b->addr;
+        if (section_marker(a) != section_marker(b)) return !section_marker(a);
+        return by_addr_name_size(a, b);
+    });
     return c;
 }
 

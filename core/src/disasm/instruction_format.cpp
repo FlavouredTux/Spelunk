@@ -98,6 +98,7 @@ namespace {
         case 2: return "word ptr ";
         case 4: return "dword ptr ";
         case 8: return "qword ptr ";
+        case 10: return "tbyte ptr ";
         default: return "";
     }
 }

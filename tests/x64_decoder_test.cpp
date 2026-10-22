@@ -571,18 +571,37 @@ void test_x87_d8_d9_memory_register_state() {
             {{xb(0xD9, 0xE0)}, M::X87Fchs, "fchs"},
             {{xb(0xD9, 0xE1)}, M::X87Fabs, "fabs"},
             {{xb(0xD9, 0xFA)}, M::X87Fsqrt, "fsqrt"},
-            {{xb(0xD9, 0x20)}, M::X87Fldcw, "fldcw word ptr [rax]"},
-            {{xb(0xD9, 0x38)}, M::X87Fnstsw, "fnstsw word ptr [rax]"},
-            {{xb(0xD9, 0x68, 0x02)}, M::X87Fnstcw, "fnstcw word ptr [rax + 0x2]"},
+            // /4-/7 are fldenv, fldcw, fnstenv, fnstcw (Intel SDM D9).
+            {{xb(0xD9, 0x20)}, M::X87Fldenv, "fldenv [rax]"},
+            {{xb(0xD9, 0x28)}, M::X87Fldcw, "fldcw word ptr [rax]"},
+            {{xb(0xD9, 0x30)}, M::X87Fnstenv, "fnstenv [rax]"},
+            {{xb(0xD9, 0x38)}, M::X87Fnstcw, "fnstcw word ptr [rax]"},
+            {{xb(0xD9, 0x68, 0x02)}, M::X87Fldcw, "fldcw word ptr [rax + 0x2]"},
+            {{xb(0xD9, 0xD0)}, M::X87Fnop, "fnop"},
+            {{xb(0xD9, 0xE4)}, M::X87Ftst, "ftst"},
+            {{xb(0xD9, 0xE5)}, M::X87Fxam, "fxam"},
+            {{xb(0xD9, 0xE8)}, M::X87Fld1, "fld1"},
+            {{xb(0xD9, 0xEB)}, M::X87Fldpi, "fldpi"},
+            {{xb(0xD9, 0xEE)}, M::X87Fldz, "fldz"},
+            {{xb(0xD9, 0xF3)}, M::X87Fpatan, "fpatan"},
+            {{xb(0xD9, 0xFB)}, M::X87Fsincos, "fsincos"},
+            {{xb(0xD9, 0xFC)}, M::X87Frndint, "frndint"},
+            {{xb(0xD9, 0xFF)}, M::X87Fcos, "fcos"},
+            // DA: m32 integer arithmetic, fcmov, fucompp.
+            {{xb(0xDA, 0x00)}, M::X87Fiadd, "fiadd dword ptr [rax]"},
+            {{xb(0xDA, 0x3B)}, M::X87Fidivr, "fidivr dword ptr [rbx]"},
+            {{xb(0xDA, 0xC1)}, M::X87Fcmovb, "fcmovb st(0), st(1)"},
+            {{xb(0xDA, 0xDA)}, M::X87Fcmovu, "fcmovu st(0), st(2)"},
+            {{xb(0xDA, 0xE9)}, M::X87Fucompp, "fucompp"},
         },
         {
             // Truncated disp32 errors out instead of misdecoding.
             {{xb(0xD8, 0xA0)}, "truncated x87 m32 disp32"},
             // Reserved/not-modeled rows land on not_implemented with addr.
             {{xb(0xD9, 0x08)}, "reserved D9 /1"},
-            {{xb(0xD9, 0xFF)}, "fcos not modeled"},
-            {{xb(0xD9, 0xD0)}, "fnop not modeled"},
-            {{xb(0xD9, 0x30)}, "fstenv not modeled"},
+            {{xb(0xD9, 0xD1)}, "reserved D9 D1"},
+            {{xb(0xD9, 0xE2)}, "reserved D9 E2"},
+            {{xb(0xDA, 0xE8)}, "reserved DA E8"},
         },
         false);
 }
@@ -616,12 +635,16 @@ void test_x87_dc_dd_m64_and_fucom() {
             {{xb(0xDD, 0xDA)}, M::X87Fstp, "fstp st(2)"},
             {{xb(0xDD, 0xE3)}, M::X87Fucom, "fucom st(3)"},
             {{xb(0xDD, 0xEC)}, M::X87Fucomp, "fucomp st(4)"},
+            {{xb(0xDD, 0x08)}, M::X87Fisttp, "fisttp qword ptr [rax]"},
+            {{xb(0xDD, 0x20)}, M::X87Frstor, "frstor [rax]"},
+            {{xb(0xDD, 0x30)}, M::X87Fnsave, "fnsave [rax]"},
+            {{xb(0xDD, 0xC1)}, M::X87Ffree, "ffree st(1)"},
         },
         {
             {{xb(0xDC, 0xD1)}, "reserved DC D1"},
             {{xb(0xDC, 0xDA)}, "reserved DC DA"},
-            {{xb(0xDD, 0xC1)}, "ffree not modeled"},
-            {{xb(0xDD, 0x20)}, "frstor not modeled"},
+            {{xb(0xDD, 0x28)}, "reserved DD /5"},
+            {{xb(0xDD, 0xF1)}, "reserved DD F1"},
         },
         true);
 }
@@ -629,12 +652,18 @@ void test_x87_dc_dd_m64_and_fucom() {
 void test_x87_db_de_df_integer_pop_fini() {
     run_x87(
         {
-            // DB: m32 integer transfers, fucomi/fucomip, finit.
+            // DB: m32 integer and m80 transfers, fcmovn*, fucomi/fcomi,
+            // fnclex and finit. The popping compares live in DF.
             {{xb(0xDB, 0x00)}, M::X87Fild, "fild dword ptr [rax]"},
+            {{xb(0xDB, 0x08)}, M::X87Fisttp, "fisttp dword ptr [rax]"},
             {{xb(0xDB, 0x11)}, M::X87Fist, "fist dword ptr [rcx]"},
             {{xb(0xDB, 0x5C, 0x24, 0x40)}, M::X87Fistp, "fistp dword ptr [rsp + 0x40]"},
+            {{xb(0xDB, 0x28)}, M::X87Fld, "fld tbyte ptr [rax]"},
+            {{xb(0xDB, 0x38)}, M::X87Fstp, "fstp tbyte ptr [rax]"},
+            {{xb(0xDB, 0xC9)}, M::X87Fcmovne, "fcmovne st(0), st(1)"},
             {{xb(0xDB, 0xE9)}, M::X87Fucomi, "fucomi st(1)"},
-            {{xb(0xDB, 0xF3)}, M::X87Fucomip, "fucomip st(3)"},
+            {{xb(0xDB, 0xF3)}, M::X87Fcomi, "fcomi st(3)"},
+            {{xb(0xDB, 0xE2)}, M::X87Fnclex, "fnclex"},
             {{xb(0xDB, 0xE3)}, M::X87Finit, "finit"},
             // DE: pop variants write st(i) then pop; D9 lone fcompp.
             {{xb(0xDE, 0xC1)}, M::X87Faddp, "faddp st(1), st(0)"},
@@ -644,6 +673,8 @@ void test_x87_db_de_df_integer_pop_fini() {
             {{xb(0xDE, 0xF5)}, M::X87Fdivrp, "fdivrp st(5), st(0)"},
             {{xb(0xDE, 0xFE)}, M::X87Fdivp, "fdivp st(6), st(0)"},
             {{xb(0xDE, 0xD9)}, M::X87Fcompp, "fcompp"},
+            {{xb(0xDE, 0x00)}, M::X87Fiadd, "fiadd word ptr [rax]"},
+            {{xb(0xDE, 0x29)}, M::X87Fisubr, "fisubr word ptr [rcx]"},
             // DF: m16/m64 integer transfers; E0 stores status to AX.
             {{xb(0xDF, 0x00)}, M::X87Fild, "fild word ptr [rax]"},
             {{xb(0xDF, 0x10)}, M::X87Fist, "fist word ptr [rax]"},
@@ -651,17 +682,19 @@ void test_x87_db_de_df_integer_pop_fini() {
             {{xb(0xDF, 0x28)}, M::X87Fild, "fild qword ptr [rax]"},
             {{xb(0xDF, 0x39)}, M::X87Fistp, "fistp qword ptr [rcx]"},
             {{xb(0xDF, 0xE0)}, M::X87Fnstsw, "fnstsw ax"},
+            {{xb(0xDF, 0xE9)}, M::X87Fucomip, "fucomip st(1)"},
+            {{xb(0xDF, 0xF2)}, M::X87Fcomip, "fcomip st(2)"},
+            {{xb(0xDF, 0x08)}, M::X87Fisttp, "fisttp word ptr [rax]"},
+            {{xb(0xDF, 0x20)}, M::X87Fbld, "fbld tbyte ptr [rax]"},
+            {{xb(0xDF, 0x30)}, M::X87Fbstp, "fbstp tbyte ptr [rax]"},
         },
         {
-            {{xb(0xDB, 0x28)}, "fld m80 not modeled"},
-            {{xb(0xDB, 0x38)}, "fstp m80 not modeled"},
-            {{xb(0xDB, 0xE2)}, "fnclex not modeled"},
+            {{xb(0xDB, 0x20)}, "reserved DB /4"},
             {{xb(0xDB, 0xE1)}, "reserved DB E1"},
             {{xb(0xDE, 0xD1)}, "reserved DE D1"},
             {{xb(0xDE, 0xDA)}, "reserved DE DA"},
-            {{xb(0xDE, 0x00)}, "fiadd m16 not modeled"},
             {{xb(0xDF, 0xC4)}, "ffreep not modeled"},
-            {{xb(0xDF, 0xE9)}, "reserved DF E9"},
+            {{xb(0xDF, 0xF9)}, "reserved DF F9"},
         },
         true);
 

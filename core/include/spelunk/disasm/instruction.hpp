@@ -324,6 +324,18 @@ enum class Mnemonic : u16 {
     X87Fldcw, X87Fnstcw, X87Fnstsw,
     X87Fucom, X87Fucomp, X87Fucomi, X87Fucomip,
     X87Finit,
+    X87Fldenv, X87Fnstenv, X87Frstor, X87Fnsave,
+    X87Fisttp, X87Fbld, X87Fbstp,
+    X87Fiadd, X87Fimul, X87Ficom, X87Ficomp,
+    X87Fisub, X87Fisubr, X87Fidiv, X87Fidivr,
+    X87Fnop, X87Ftst, X87Fxam,
+    X87Fld1, X87Fldl2t, X87Fldl2e, X87Fldpi, X87Fldlg2, X87Fldln2, X87Fldz,
+    X87F2xm1, X87Fyl2x, X87Fptan, X87Fpatan, X87Fxtract, X87Fprem1,
+    X87Fdecstp, X87Fincstp, X87Fprem, X87Fyl2xp1, X87Fsincos,
+    X87Frndint, X87Fscale, X87Fsin, X87Fcos,
+    X87Fcmovb, X87Fcmove, X87Fcmovbe, X87Fcmovu,
+    X87Fcmovnb, X87Fcmovne, X87Fcmovnbe, X87Fcmovnu,
+    X87Fucompp, X87Fnclex, X87Fcomi, X87Fcomip, X87Ffree,
     Count,
 };
 
@@ -484,6 +496,10 @@ struct Instruction {
            m == Mnemonic::A64Ret || m == Mnemonic::A64Brk ||
            m == Mnemonic::A64Udf || m == Mnemonic::A64Eret ||
            m == Mnemonic::A32Ret || m == Mnemonic::A32Udf;
+}
+
+[[nodiscard]] constexpr bool is_x87(Mnemonic m) noexcept {
+    return m >= Mnemonic::X87Fld && m <= Mnemonic::X87Ffree;
 }
 
 [[nodiscard]] constexpr bool ends_basic_block(Mnemonic m) noexcept {

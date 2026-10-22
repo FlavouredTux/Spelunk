@@ -22,4 +22,19 @@ EXPORTED int __cdecl after_calls(int a, int b) {
     return start + b + a;
 }
 
+// Two calls merge before the return: st0 is a phi of call clobbers, which
+// says nothing about the return type.
+EXPORTED int __cdecl merged_calls(int a) {
+    int r;
+    switch (a) {
+        case 0: r = (int)GetTickCount(); break;
+        case 1: r = (int)GetLastError(); break;
+        default: r = (int)GetCurrentProcessId(); break;
+    }
+    return r * 3 + a * 5 - (r >> 2);
+}
+
+// Returns nothing: the st0 it leaves is whatever its caller had there.
+EXPORTED void __cdecl nothing(void) {}
+
 void mainCRTStartup(void) { ExitProcess((unsigned)forward(1.5, 3)); }

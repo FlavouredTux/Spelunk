@@ -1,0 +1,14 @@
+// _merged_calls
+uint32_t _merged_calls(uint32_t a1) {
+  int32_t result;
+  if (!a1) {
+    result = GetTickCount();
+  } else {
+    if (a1 != 1) {
+      result = GetCurrentProcessId();
+    } else {
+      result = GetLastError();
+    }
+  }
+  return result + result * 2 + a1 + a1 * 4 - ((int32_t)result >> 2);
+}

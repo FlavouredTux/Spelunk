@@ -1,0 +1,4 @@
+// _nothing
+void _nothing(void) {
+  return;
+}

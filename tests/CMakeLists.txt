@@ -814,7 +814,7 @@ spelunk_golden_test(
 # x87 values live on a register stack; the lifter tracks it by position so
 # loads, compares (fnstsw/sahf and fcomi), fldcw truncation and st0 returns
 # read as plain double arithmetic.
-foreach(_fn scale magnitude pick truncate forward after_calls)
+foreach(_fn scale magnitude pick truncate forward after_calls merged_calls nothing)
     spelunk_golden_test(
         NAME    win32_abi_${_fn}_pseudo
         FIXTURE win32_abi

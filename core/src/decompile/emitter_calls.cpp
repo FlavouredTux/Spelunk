@@ -89,6 +89,19 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
         }
         return nullptr;
     };
+    // x87 registers merge as F64 phis whatever they hold, so on x86 a phi
+    // is evidence only when some incoming path computes a floating value;
+    // a merge of call clobbers or the untouched entry stack is not.
+    std::set<const IrInst*> visited_phis;
+    const auto computes_fp = [&](this const auto& self, const IrInst* inst) -> bool {
+        if (!inst || inst->op == IrOp::Clobber) return false;
+        if (inst->op != IrOp::Phi) return is_float_type(inst->dst.type);
+        if (!visited_phis.insert(inst).second) return false;
+        for (const auto& operand : inst->phi_operands) {
+            if (self(producer(operand))) return true;
+        }
+        return false;
+    };
     std::optional<IrType> type;
     const auto body_uses = [&](const IrInst* producer_inst) {
         const auto key = producer_inst ? ssa_key(producer_inst->dst) : std::nullopt;
@@ -152,6 +165,10 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
         }
         if (!floating ||
             floating->op == IrOp::Clobber || !is_float_type(floating->dst.type)) return result;
+        if (is_x86_32_abi(abi)) {
+            visited_phis.clear();
+            if (!computes_fp(floating)) return result;
+        }
         // A scalar FP calculation used only as the return, alongside an
         // integer scratch value already consumed by the body, identifies the
         // FP lane even when address arithmetic happened to use RAX. x86
@@ -597,11 +614,14 @@ bool Emitter::is_fp_call_return(const IrValue& value) const {
 }
 
 bool Emitter::is_incidental_x86_fp_return(const IrValue& value) const {
-    if (abi != Abi::SysVAmd64 && abi != Abi::Win64) return false;
+    if (abi != Abi::SysVAmd64 && abi != Abi::Win64 && !is_x86_32_abi(abi)) return false;
     if (value.kind != IrValueKind::Reg ||
         canonical_reg(value.reg) != canonical_reg(fp_return_reg(abi))) {
         return false;
     }
+    // No Win32 convention passes arguments on the x87 stack, so an
+    // untouched st(0) is whatever the caller left there.
+    if (is_x86_32_abi(abi) && value.version == 0) return true;
     const IrInst* root = def_of(value);
     if (root && root->op == IrOp::Clobber) return !is_fp_call_return(value);
     if (!root || root->op != IrOp::Phi) return false;

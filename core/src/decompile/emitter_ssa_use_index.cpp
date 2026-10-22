@@ -55,7 +55,7 @@ void SsaUseIndex::observe(const IrInst& inst, Position position) {
     if (const auto key = indexed_key(inst.dst); key) {
         // Assignment (rather than emplace) intentionally preserves the
         // emitter's historical last-definition-wins behaviour.
-        Entry& entry = entries_[*key];
+        Entry& entry = entry_for(*key);
         entry.definition = &inst;
         entry.definition_position = position;
     }
@@ -64,7 +64,7 @@ void SsaUseIndex::observe(const IrInst& inst, Position position) {
     for_each_operand(inst, [&](const IrValue& operand) {
         const auto key = indexed_key(operand);
         if (!key) return;
-        Entry& entry = entries_[*key];
+        Entry& entry = entry_for(*key);
         ++entry.syntactic_uses;
         entry.syntactic_user_positions.push_back(position);
         if (barrier) return;
@@ -94,7 +94,7 @@ void SsaUseIndex::scan_visible(const IrFunction& fn,
             for_each_operand(inst, [&](const IrValue& operand) {
                 const auto key = indexed_key(operand);
                 if (!key) return;
-                Entry& entry = entries_[*key];
+                Entry& entry = entry_for(*key);
                 if (flag_assign) ++entry.visible_flag_assign_uses;
                 entry.visible_user_positions.push_back(position);
             });
@@ -104,12 +104,20 @@ void SsaUseIndex::scan_visible(const IrFunction& fn,
 
 void SsaUseIndex::reset() noexcept {
     entries_.clear();
+    index_.clear();
+}
+
+SsaUseIndex::Entry& SsaUseIndex::entry_for(const SsaKey& key) {
+    if (const auto found = index_.find(key); found != index_.end()) return *found->second;
+    Entry& entry = entries_[key];
+    index_.emplace(key, &entry);
+    return entry;
 }
 
 const SsaUseIndex::Entry*
 SsaUseIndex::find_entry(const SsaKey& key) const noexcept {
-    const auto found = entries_.find(key);
-    return found == entries_.end() ? nullptr : &found->second;
+    const auto found = index_.find(key);
+    return found == index_.end() ? nullptr : found->second;
 }
 
 const IrInst* SsaUseIndex::definition(const SsaKey& key) const noexcept {

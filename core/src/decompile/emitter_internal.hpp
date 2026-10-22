@@ -408,6 +408,11 @@ struct Emitter {
 
     [[nodiscard]] std::optional<IrValue>
     alias_root_for_value(const IrValue& v, int depth = 0) const;
+    [[nodiscard]] std::optional<IrValue>
+    alias_root_for_value_uncached(const IrValue& v, int depth) const;
+    mutable std::map<std::pair<SsaKey, int>, std::optional<IrValue>> alias_root_memo;
+    mutable const IrFunction* alias_root_memo_fn = nullptr;
+    mutable std::size_t alias_root_memo_slots = 0;
 
     // An arg reg is "stale" if the caller never deliberately set it before the
     // call: either it's still the function's live-in (version 0) and no user

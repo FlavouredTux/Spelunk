@@ -58,12 +58,12 @@ Emitter::render_selection_phi(const IrInst& phi, int depth) const {
     for (std::size_t direct_i = 0; direct_i < 2; ++direct_i) {
         const addr_t direct_pred = phi.phi_preds[direct_i];
         const addr_t arm_pred = phi.phi_preds[1 - direct_i];
-        const IrBlock* condition_block = nullptr;
-        const IrBlock* arm_block = nullptr;
-        for (const auto& block : fn->blocks) {
-            if (block.start == direct_pred) condition_block = &block;
-            if (block.start == arm_pred) arm_block = &block;
-        }
+        const auto block_named = [&](addr_t start) -> const IrBlock* {
+            const auto found = fn->block_at.find(start);
+            return found != fn->block_at.end() ? &fn->blocks[found->second] : nullptr;
+        };
+        const IrBlock* condition_block = block_named(direct_pred);
+        const IrBlock* arm_block = block_named(arm_pred);
         if (!condition_block || !arm_block || condition_block->insts.empty()) continue;
         const IrInst& branch = condition_block->insts.back();
         if (branch.op != IrOp::CondBranch || branch.src_count < 1) continue;
@@ -362,6 +362,26 @@ Emitter::single_write_slot_alias_for_value(const IrValue& v) const {
 std::optional<IrValue>
 Emitter::alias_root_for_value(const IrValue& v, int depth) const {
     if (depth > 12) return std::nullopt;
+    // Every phi operand branches the search, and rendering asks again for
+    // each operand of each phi it meets: memoize per value and depth. The
+    // answer reads only the IR and the single-write slot map.
+    if (alias_root_memo_fn != fn || alias_root_memo_slots != single_write_slot_value.size()) {
+        alias_root_memo.clear();
+        alias_root_memo_fn = fn;
+        alias_root_memo_slots = single_write_slot_value.size();
+    }
+    const auto key = ssa_key(v);
+    if (key) {
+        if (auto found = alias_root_memo.find({*key, depth}); found != alias_root_memo.end())
+            return found->second;
+    }
+    auto root = alias_root_for_value_uncached(v, depth);
+    if (key) alias_root_memo.emplace(std::pair{*key, depth}, root);
+    return root;
+}
+
+std::optional<IrValue>
+Emitter::alias_root_for_value_uncached(const IrValue& v, int depth) const {
     const IrInst* d = def_stripped(v);
     if (!d) return v;
     if (d->op == IrOp::Assign && d->src_count >= 1) {

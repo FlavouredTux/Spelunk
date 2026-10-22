@@ -1123,12 +1123,12 @@ void Emitter::name_merge_values() {
                      ++direct_i) {
                     const addr_t direct_pred = phi.phi_preds[direct_i];
                     const addr_t arm_pred = phi.phi_preds[1 - direct_i];
-                    const IrBlock* direct = nullptr;
-                    const IrBlock* arm = nullptr;
-                    for (const auto& candidate : fn->blocks) {
-                        if (candidate.start == direct_pred) direct = &candidate;
-                        if (candidate.start == arm_pred) arm = &candidate;
-                    }
+                    const auto block_named = [&](addr_t start) -> const IrBlock* {
+                        const auto found = fn->block_at.find(start);
+                        return found != fn->block_at.end() ? &fn->blocks[found->second] : nullptr;
+                    };
+                    const IrBlock* direct = block_named(direct_pred);
+                    const IrBlock* arm = block_named(arm_pred);
                     if (!direct || !arm || direct->insts.empty()) continue;
                     const IrInst& branch = direct->insts.back();
                     const bool diamond = branch.op == IrOp::CondBranch &&
@@ -1166,13 +1166,9 @@ void Emitter::name_merge_values() {
                         }
                     }
                 }
-                const IrBlock* predecessor = nullptr;
-                for (const auto& candidate : fn->blocks) {
-                    if (candidate.start == phi.phi_preds[i]) {
-                        predecessor = &candidate;
-                        break;
-                    }
-                }
+                const auto found_predecessor = fn->block_at.find(phi.phi_preds[i]);
+                const IrBlock* predecessor = found_predecessor != fn->block_at.end()
+                    ? &fn->blocks[found_predecessor->second] : nullptr;
                 if (!predecessor || predecessor->successors.size() != 1 ||
                     predecessor->successors[0] != merge_block.start) {
                     continue;
@@ -1209,6 +1205,28 @@ void Emitter::analyze_merge_definite_assignment() {
     definitely_assigned_merge_locals.clear();
     if (!fn || merge_locals.empty()) return;
 
+    // The blocks assigning each merge local, from one pass: every local asks.
+    std::map<std::string, std::vector<bool>, std::less<>> assigning_blocks;
+    std::map<SsaUseIndex::Position, std::vector<std::string>> assigned_names;
+    const auto mark = [&](const std::string& name, std::size_t bi, std::size_t ii) {
+        auto& flags = assigning_blocks[name];
+        if (flags.empty()) flags.assign(fn->blocks.size(), false);
+        flags[bi] = true;
+        assigned_names[{bi, ii}].push_back(name);
+    };
+    for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+        const auto& block = fn->blocks[bi];
+        for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
+            if (auto name = merge_assignment_name_for(block.insts[ii])) mark(*name, bi, ii);
+            const std::pair position{bi, ii};
+            if (!merge_bound_calls.contains(position)) continue;
+            const auto bound = bound_call_key.find(position);
+            if (bound == bound_call_key.end()) continue;
+            if (const auto named = merge_value_names.find(bound->second);
+                named != merge_value_names.end()) mark(named->second, bi, ii);
+        }
+    }
+
     for (const auto& [name, local] : merge_locals) {
         if (local.initializer) {
             definitely_assigned_merge_locals.insert(name);
@@ -1223,26 +1241,17 @@ void Emitter::analyze_merge_definite_assignment() {
             }
             return *key;
         };
-        const auto assigns_at = [&](std::size_t bi, std::size_t ii,
-                                    const IrInst& inst) {
-            if (merge_assignment_name_for(inst) == name) return true;
-            const std::pair position{bi, ii};
-            if (!merge_bound_calls.contains(position)) return false;
-            auto bound = bound_call_key.find(position);
-            if (bound == bound_call_key.end()) return false;
-            auto named = merge_value_names.find(bound->second);
-            return named != merge_value_names.end() && named->second == name;
+        const auto assigns_at = [&](std::size_t bi, std::size_t ii, const IrInst&) {
+            const auto found = assigned_names.find({bi, ii});
+            return found != assigned_names.end() &&
+                std::ranges::find(found->second, name) != found->second.end();
         };
-
-        std::vector<bool> block_assigns(fn->blocks.size(), false);
+        const auto assigning = assigning_blocks.find(name);
+        std::vector<bool> block_assigns = assigning != assigning_blocks.end()
+            ? assigning->second : std::vector<bool>(fn->blocks.size(), false);
         std::vector<bool> edge_assigns(fn->blocks.size(), false);
         for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
             const auto& block = fn->blocks[bi];
-            for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
-                if (assigns_at(bi, ii, block.insts[ii])) {
-                    block_assigns[bi] = true;
-                }
-            }
             if (auto edge = merge_edge_assignments.find(block.start);
                 edge != merge_edge_assignments.end()) {
                 edge_assigns[bi] = std::ranges::any_of(
@@ -1278,29 +1287,30 @@ void Emitter::analyze_merge_definite_assignment() {
             }
         }
 
-        bool safe = true;
-        for (std::size_t bi = 0; bi < fn->blocks.size() && safe; ++bi) {
-            bool assigned = in[bi];
-            const auto& block = fn->blocks[bi];
-            for (std::size_t ii = 0; ii < block.insts.size(); ++ii) {
-                const IrInst& inst = block.insts[ii];
-                if (inst.op != IrOp::Phi) {
-                    for (u8 si = 0; si < inst.src_count && si < inst.srcs.size(); ++si) {
-                        auto key = local_key(inst.srcs[si]);
-                        if (!key) continue;
-                        const auto users =
-                            ssa_uses.visible_user_positions(*key);
-                        const bool visible = std::ranges::find(
-                            users, SsaUseIndex::Position{bi, ii}) != users.end();
-                        if (visible && !assigned) {
-                            safe = false;
-                            break;
-                        }
-                    }
-                }
-                if (!safe) break;
-                assigned |= assigns_at(bi, ii, inst);
+        // Every visible read of the local must follow an assignment: on
+        // entry to its block, or earlier in that block.
+        const auto assigned_before = [&](std::size_t bi, std::size_t ii) {
+            if (in[bi]) return true;
+            for (std::size_t jj = 0; jj < ii; ++jj) {
+                if (assigns_at(bi, jj, fn->blocks[bi].insts[jj])) return true;
             }
+            return false;
+        };
+        bool safe = true;
+        for (const auto& key : local.keys) {
+            for (const auto& [bi, ii] : ssa_uses.visible_user_positions(key)) {
+                if (bi >= fn->blocks.size() || ii >= fn->blocks[bi].insts.size()) continue;
+                const IrInst& inst = fn->blocks[bi].insts[ii];
+                if (inst.op == IrOp::Phi) continue;
+                bool reads = false;
+                for (u8 si = 0; si < inst.src_count && si < inst.srcs.size(); ++si)
+                    reads |= local_key(inst.srcs[si]) == key;
+                if (reads && !assigned_before(bi, ii)) {
+                    safe = false;
+                    break;
+                }
+            }
+            if (!safe) break;
         }
         if (safe) definitely_assigned_merge_locals.insert(name);
     }

@@ -738,6 +738,7 @@ Result<std::string> PseudoCEmitter::emit(const StructuredFunction& sf,
     if (!options.line_map) {
         out = strip_label_only_if_blocks(out);
         out = strip_dead_declarations(e, out, header);
+        out = strip_unused_global_externs(e, std::move(out), header);
         out = collapse_empty_then_else_blocks(out);
         if (e.is_ppc_abi()) {
             out = rename_ppc_temporaries(std::move(out));

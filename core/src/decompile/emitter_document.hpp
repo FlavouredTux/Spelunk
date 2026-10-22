@@ -63,6 +63,10 @@ merge_local_declarations(const Emitter& emitter, const std::string& body);
 strip_dead_declarations(const Emitter& emitter, const std::string& output,
                         const std::string& header);
 
+[[nodiscard]] std::string
+strip_unused_global_externs(const Emitter& emitter, std::string output,
+                            const std::string& header);
+
 void prepend_untyped_pointer_note(std::string& output,
                                   const std::string& header);
 

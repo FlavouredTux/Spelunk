@@ -1,5 +1,6 @@
 #include "emitter_document.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <format>
@@ -562,6 +563,41 @@ strip_dead_declarations(const Emitter& emitter, const std::string& out,
         cleaned += '\n';
     }
     return cleaned;
+}
+
+// Dead-declaration pruning can delete the last statement that read a
+// global (`uint32_t esi = __imp__Sleep@4;` once the calls through esi
+// render by name), orphaning the extern emitted above the function.
+std::string strip_unused_global_externs(const Emitter& e, std::string out,
+                                        const std::string& header) {
+    const std::string signature = header.ends_with('\n')
+        ? header.substr(0, header.size() - 1) : header;
+    const std::size_t function_at = out.find(signature);
+    if (function_at == std::string::npos) return out;
+    const std::string_view function = std::string_view(out).substr(function_at);
+    std::string prefix = out.substr(0, function_at);
+    bool removed = false;
+    for (const auto& [name, _] : e.global_decls) {
+        if (text_contains_identifier(function, name)) continue;
+        for (std::size_t line = 0; line < prefix.size();) {
+            const std::size_t end = std::min(prefix.find('\n', line), prefix.size());
+            const std::string_view text = std::string_view(prefix).substr(line, end - line);
+            if (text.starts_with("extern ") && text.ends_with(";") &&
+                text_contains_identifier(text, name)) {
+                prefix.erase(line, end + 1 - line);
+                removed = true;
+                continue;
+            }
+            line = end + 1;
+        }
+    }
+    if (!removed) return out;
+    // An emptied extern block leaves its separating blank line behind.
+    const bool globals_left = std::ranges::any_of(e.global_decls, [&](const auto& global) {
+        return text_contains_identifier(function, global.first);
+    });
+    if (!globals_left && prefix.ends_with("\n\n")) prefix.pop_back();
+    return prefix + std::string(function);
 }
 
 // Non-compilable-spelling note: subscripting through a void* is

@@ -89,6 +89,10 @@ add_executable(spelunk_x64_decoder_test x64_decoder_test.cpp)
 target_link_libraries(spelunk_x64_decoder_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME x64_decoder_unit COMMAND spelunk_x64_decoder_test)
 
+add_executable(spelunk_x86_decoder_test x86_decoder_test.cpp)
+target_link_libraries(spelunk_x86_decoder_test PRIVATE spelunk::core spelunk::flags)
+add_test(NAME x86_decoder_unit COMMAND spelunk_x86_decoder_test)
+
 add_executable(spelunk_instruction_test instruction_test.cpp)
 target_link_libraries(spelunk_instruction_test PRIVATE spelunk::core spelunk::flags)
 add_test(NAME instruction_unit COMMAND spelunk_instruction_test)

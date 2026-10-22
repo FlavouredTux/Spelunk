@@ -1090,26 +1090,30 @@ struct Emitter {
     // ABI's entry-r1 + 0x28 overflow slot.
     [[nodiscard]] std::optional<i64>
     entry_stack_offset(const IrValue& v, int depth = 0) const;
-    [[nodiscard]] std::optional<i64>
-    entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int depth) const;
+    [[nodiscard]] std::optional<i64> entry_stack_offset_of_phi(const IrValue& v) const;
     [[nodiscard]] std::optional<i64>
     entry_stack_offset_uncached(const IrValue& v, int depth) const;
+    void solve_stack_phis() const;
     [[nodiscard]] static bool is_stack_realignment(const IrInst& d);
     [[nodiscard]] std::optional<std::size_t>
     rep_string_tail(const IrBlock& block, std::size_t index) const;
     [[nodiscard]] std::optional<std::string>
     render_rep_string_statement(const IrInst& inst) const;
-    // Stack-pointer phis being resolved, with the offset each is assumed
-    // to hold while its back edges are checked.
-    mutable std::map<SsaKey, std::optional<i64>> stack_phi_assumptions;
+    // Entry offset of every stack-pointer phi, solved once per function by
+    // solve_stack_phis. While it runs, `stack_phi_solving` holds each phi's
+    // current state and reads bypass the memo.
+    struct StackPhiState {
+        bool known = false;          // false: no incoming edge resolved yet
+        std::optional<i64> offset;   // when known; nullopt: not a stack offset
+    };
+    mutable std::map<SsaKey, std::optional<i64>> stack_phi_offsets;
+    mutable std::map<SsaKey, StackPhiState> stack_phi_solving;
+    mutable bool stack_phi_unknown_read = false;
     // Settled entry offsets: push-built argument chains run hundreds of
-    // values deep, and every store and call asks. A result that leaned on
-    // a loop phi's assumption waits in `entry_offset_deferred` until the
-    // outermost phi confirms it; one that hit the depth cap never settles.
+    // values deep, and every store and call asks. One that hit the depth
+    // cap never settles.
     mutable std::map<SsaKey, std::optional<i64>> entry_offset_memo;
-    mutable std::vector<std::pair<SsaKey, std::optional<i64>>> entry_offset_deferred;
     mutable const IrFunction* entry_offset_memo_fn = nullptr;
-    mutable bool entry_offset_assumed = false;
     mutable bool entry_offset_capped = false;
 
     // Trace a value back through Add/Sub/Assign chains to see if it's stack-relative.

@@ -649,25 +649,21 @@ Emitter::entry_stack_offset(const IrValue& v, int depth) const {
         return std::nullopt;
     }
     const auto key = ssa_key(v);
-    if (!key) return entry_stack_offset_uncached(v, depth);
+    // While the phis are being solved their states still move, so nothing
+    // derived from them may settle.
+    if (!key || !stack_phi_solving.empty()) return entry_stack_offset_uncached(v, depth);
     if (entry_offset_memo_fn != fn) {
         entry_offset_memo.clear();
-        entry_offset_deferred.clear();
         entry_offset_memo_fn = fn;
+        solve_stack_phis();
     }
     if (auto memo = entry_offset_memo.find(*key); memo != entry_offset_memo.end()) {
         return memo->second;
     }
-    const bool outer_assumed = entry_offset_assumed;
     const bool outer_capped = entry_offset_capped;
-    entry_offset_assumed = false;
     entry_offset_capped = false;
     const auto result = entry_stack_offset_uncached(v, depth);
-    if (!entry_offset_capped) {
-        if (entry_offset_assumed) entry_offset_deferred.emplace_back(*key, result);
-        else entry_offset_memo.emplace(*key, result);
-    }
-    entry_offset_assumed = entry_offset_assumed || outer_assumed;
+    if (!entry_offset_capped) entry_offset_memo.emplace(*key, result);
     entry_offset_capped = entry_offset_capped || outer_capped;
     return result;
 }
@@ -684,7 +680,7 @@ Emitter::entry_stack_offset_uncached(const IrValue& v, int depth) const {
         }
         if (v.version == 0) return i64{0};
         const IrInst* d = def_of(v);
-        if (d && d->op == IrOp::Phi) return entry_stack_offset_of_phi(v, *d, depth);
+        if (d && d->op == IrOp::Phi) return entry_stack_offset_of_phi(v);
         if (!d || d->op != IrOp::Assign || d->src_count < 1) {
             return std::nullopt;
         }
@@ -729,54 +725,72 @@ bool Emitter::is_stack_realignment(const IrInst& d) {
 }
 
 // A stack pointer merged from paths that agree on its offset, as after a
-// branch that calls a callee-pop function. Loop phis see themselves through
-// the back edge: assume the offset the other edges agree on, then check it.
-std::optional<i64>
-Emitter::entry_stack_offset_of_phi(const IrValue& v, const IrInst& phi, int depth) const {
+// branch that calls a callee-pop function.
+std::optional<i64> Emitter::entry_stack_offset_of_phi(const IrValue& v) const {
     const auto key = ssa_key(v);
     if (!key) return std::nullopt;
-    if (auto assumed = stack_phi_assumptions.find(*key);
-        assumed != stack_phi_assumptions.end()) {
-        entry_offset_assumed = true;
-        return assumed->second;
+    if (!stack_phi_solving.empty()) {
+        const auto state = stack_phi_solving.find(*key);
+        if (state == stack_phi_solving.end()) return std::nullopt;
+        if (!state->second.known) stack_phi_unknown_read = true;
+        return state->second.offset;
     }
-    const std::size_t deferred_mark = entry_offset_deferred.size();
-    stack_phi_assumptions.emplace(*key, std::nullopt);
-    std::optional<i64> agreed;
-    std::vector<const IrValue*> deferred;
-    bool consistent = true;
-    for (const auto& operand : phi.phi_operands) {
-        if (ssa_key(operand) == key) continue;
-        const auto offset = entry_stack_offset(operand, depth + 1);
-        if (!offset) {
-            deferred.push_back(&operand);
-            continue;
+    const auto solved = stack_phi_offsets.find(*key);
+    return solved == stack_phi_offsets.end() ? std::nullopt : solved->second;
+}
+
+// Loop phis read each other through their back edges, and a CFG with many
+// loops links dozens of them, so they are solved together rather than by
+// recursing through one another (which revisits the web once per path).
+// Each phi starts unknown, takes the offset its resolved incoming values
+// agree on, and becomes "not a stack offset" when they disagree or one is
+// not stack-relative. A state only moves unknown -> offset -> none, so the
+// loop ends.
+void Emitter::solve_stack_phis() const {
+    stack_phi_offsets.clear();
+    std::vector<std::pair<SsaKey, const IrInst*>> phis;
+    for (const auto& block : fn->blocks) {
+        for (const auto& inst : block.insts) {
+            if (inst.op != IrOp::Phi || inst.dst.kind != IrValueKind::Reg ||
+                !is_stack_base_reg(inst.dst.reg)) continue;
+            if (const auto key = ssa_key(inst.dst)) {
+                stack_phi_solving.emplace(*key, StackPhiState{});
+                phis.emplace_back(*key, &inst);
+            }
         }
-        if (agreed && *agreed != *offset) consistent = false;
-        agreed = offset;
     }
-    if (agreed && consistent && !deferred.empty()) {
-        // What the first pass derived from the unset assumption is stale.
-        entry_offset_deferred.resize(deferred_mark);
-        stack_phi_assumptions[*key] = agreed;
-        for (const IrValue* operand : deferred) {
-            if (entry_stack_offset(*operand, depth + 1) != agreed) consistent = false;
+    for (bool changed = !phis.empty(); changed;) {
+        changed = false;
+        for (const auto& [key, phi] : phis) {
+            StackPhiState& state = stack_phi_solving.at(key);
+            if (state.known && !state.offset) continue;
+            StackPhiState next;
+            for (const auto& operand : phi->phi_operands) {
+                if (ssa_key(operand) == key) continue;
+                stack_phi_unknown_read = false;
+                const bool outer_capped = entry_offset_capped;
+                entry_offset_capped = false;
+                const auto offset = entry_stack_offset(operand, 1);
+                const bool pending = !offset && stack_phi_unknown_read && !entry_offset_capped;
+                entry_offset_capped = outer_capped;
+                if (pending) continue;
+                if (!offset || (next.known && next.offset != offset)) {
+                    next = {true, std::nullopt};
+                    break;
+                }
+                next = {true, offset};
+            }
+            if (next.known && (!state.known || state.offset != next.offset)) {
+                // A settled offset never changes to another one.
+                state = state.known ? StackPhiState{true, std::nullopt} : next;
+                changed = true;
+            }
         }
     }
-    stack_phi_assumptions.erase(*key);
-    // Values derived under a refuted assumption are wrong; ones derived
-    // under a confirmed one settle when no outer assumption remains.
-    if (!consistent) {
-        entry_offset_deferred.resize(deferred_mark);
-    } else if (stack_phi_assumptions.empty()) {
-        if (!entry_offset_capped) {
-            for (auto& [deferred_key, offset] : entry_offset_deferred)
-                entry_offset_memo.emplace(deferred_key, offset);
-        }
-        entry_offset_deferred.clear();
+    for (const auto& [key, state] : stack_phi_solving) {
+        stack_phi_offsets.emplace(key, state.known ? state.offset : std::nullopt);
     }
-    if (stack_phi_assumptions.empty()) entry_offset_assumed = false;
-    return consistent ? agreed : std::nullopt;
+    stack_phi_solving.clear();
 }
 
 std::optional<i64> Emitter::stack_offset(const IrValue& v, int depth) const {

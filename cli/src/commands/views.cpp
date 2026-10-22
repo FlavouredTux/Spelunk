@@ -1,6 +1,8 @@
 #include <spelunk/common/diagnostic.hpp>
 // Per-view runners (asm/cfg/ir/struct/pseudo) and the emit pipeline.
 
+#include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -9,12 +11,15 @@
 #include <format>
 #include <fstream>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <print>
 #include <set>
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -35,6 +40,7 @@
 #include <spelunk/binary/pe.hpp>
 #include <spelunk/common/annotations.hpp>
 #include <spelunk/common/error.hpp>
+#include <spelunk/common/threads.hpp>
 #include <spelunk/common/timing.hpp>
 #include <spelunk/common/types.hpp>
 #include <spelunk/decompile/emit_options.hpp>
@@ -385,31 +391,73 @@ int run_emit(const Args& args, const Binary& b) {
     const std::string_view view = args.pseudo ? (args.emit_c ? "emit-c" : "pseudo") :
         args.strct ? "struct" : args.ir ? (args.opt ? "opt" : args.ssa ? "ssa" : "ir") :
         args.cfg_pseudo ? "cfg-pseudo" : args.cfg ? "cfg" : "disasm";
-    const auto render_one = [&](const FuncWindow& win) -> Result<std::string> {
+    const auto render_one = [&](const FuncWindow& win, const EmitOptions& opts) -> Result<std::string> {
         if (args.pseudo || args.strct)
-            return render_struct_window(b, win, args.pseudo, ann_ptr, emit_opts);
+            return render_struct_window(b, win, args.pseudo, ann_ptr, opts);
         if (args.ir) return render_ir_window(b, win, args.ssa, args.opt);
-        if (args.cfg_pseudo) return format_cfg_pseudo(b, win, ann_ptr, emit_opts);
+        if (args.cfg_pseudo) return format_cfg_pseudo(b, win, ann_ptr, opts);
         if (args.cfg) return format_cfg(b, win);
         return format_disasm(b, win);
+    };
+    // A batch renders on worker threads and prints in manifest order, each
+    // result as soon as it and everything before it are done, so a deadline
+    // still leaves every finished function on stdout. Each worker lifts
+    // callees into its own cache; what else the renderers share is
+    // immutable or locked.
+    std::vector<std::optional<Result<std::string>>> rendered(view_symbols.size());
+    std::mutex rendered_mutex;
+    std::condition_variable rendered_ready;
+    std::vector<std::jthread> workers;
+    const auto render_all = [&] {
+        const std::size_t count = view_symbols.size();
+        const std::size_t threads = count > 1 ? std::min<std::size_t>(thread_pool_size(16), count) : 0;
+        if (threads <= 1) return;
+        auto next = std::make_shared<std::atomic<std::size_t>>(0);
+        for (std::size_t t = 0; t < threads; ++t) {
+            workers.emplace_back([&, next, count] {
+                IrCache cache;
+                cache.known_entries = shared_ir_cache.known_entries;
+                EmitOptions opts = emit_opts;
+                opts.ir_cache = &cache;
+                for (std::size_t i = next->fetch_add(1); i < count; i = next->fetch_add(1)) {
+                    Result<std::string> output = windows[i] ? render_one(*windows[i], opts) :
+                        Result<std::string>{std::unexpected(Error::invalid_format(
+                            std::format("could not resolve function '{}'", view_symbols[i])))};
+                    // A batch may visit thousands of distinct callees. Release
+                    // old lifted IR while retaining the discovered entries.
+                    constexpr std::size_t kMaxCachedCallees = 1024;
+                    if (cache.by_addr.size() + cache.failed.size() > kMaxCachedCallees) {
+                        cache.by_addr.clear();
+                        cache.failed.clear();
+                    }
+                    {
+                        const std::lock_guard lock(rendered_mutex);
+                        rendered[i] = std::move(output);
+                    }
+                    rendered_ready.notify_all();
+                }
+            });
+        }
+    };
+    const auto take = [&](std::size_t i) -> Result<std::string> {
+        if (workers.empty()) {
+            return windows[i] ? render_one(*windows[i], emit_opts) :
+                Result<std::string>{std::unexpected(Error::invalid_format(
+                    std::format("could not resolve function '{}'", view_symbols[i])))};
+        }
+        std::unique_lock lock(rendered_mutex);
+        rendered_ready.wait(lock, [&] { return rendered[i].has_value(); });
+        Result<std::string> output = std::move(*rendered[i]);
+        rendered[i].reset();
+        return output;
     };
     auto run_each = [&] {
         int status = EXIT_SUCCESS;
         std::size_t emitted = 0;
+        render_all();
         for (std::size_t i = 0; i < view_symbols.size(); ++i) {
             const auto& win = windows[i];
-            Result<std::string> output = win ? render_one(*win) :
-                Result<std::string>{std::unexpected(Error::invalid_format(
-                    std::format("could not resolve function '{}'", view_symbols[i])))};
-            // A batch may visit thousands of distinct callees. Release old
-            // lifted IR between completed functions while retaining the
-            // discovered-entry set for later CFG builds.
-            constexpr std::size_t kMaxCachedCallees = 1024;
-            if (shared_ir_cache.by_addr.size() + shared_ir_cache.failed.size() >
-                kMaxCachedCallees) {
-                shared_ir_cache.by_addr.clear();
-                shared_ir_cache.failed.clear();
-            }
+            Result<std::string> output = take(i);
             if (!output) status = EXIT_FAILURE;
             if (args.json) {
                 const auto quote = [](std::string_view text) {

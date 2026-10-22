@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <filesystem>
 #include <map>
@@ -138,7 +139,11 @@ public:
     // when symbols_ changes after the initial parse() - e.g. when the PDB
     // sidecar ingestion pass adds names that the on-disk PE didn't carry.
     void invalidate_caches() const noexcept {
-        caches_.reset();
+        {
+            const std::lock_guard lock(caches_mutex_);
+            caches_ready_.store(nullptr, std::memory_order_release);
+            caches_.reset();
+        }
         const std::lock_guard lock(analysis_memo_mutex_);
         analysis_memos_.clear();
     }
@@ -235,7 +240,11 @@ private:
         // && (kind == Function || kind == Object).
         std::vector<const Symbol*> defined_objects_by_addr;
     };
+    // Built on first use, possibly by concurrent emitters: `caches_ready_`
+    // publishes the finished tables, `caches_mutex_` serializes building.
     mutable std::unique_ptr<LookupCaches> caches_;
+    mutable std::atomic<const LookupCaches*> caches_ready_{nullptr};
+    mutable std::mutex caches_mutex_;
     const LookupCaches& caches() const;
 
     // Side-channel populated by the trace-replay surface; deduped on

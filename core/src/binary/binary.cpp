@@ -14,9 +14,11 @@
 namespace spelunk {
 
 const Binary::LookupCaches& Binary::caches() const {
+    if (const auto* ready = caches_ready_.load(std::memory_order_acquire)) return *ready;
+    const std::lock_guard lock(caches_mutex_);
     if (caches_) return *caches_;
-    caches_ = std::make_unique<LookupCaches>();
-    auto& c = *caches_;
+    auto built = std::make_unique<LookupCaches>();
+    auto& c = *built;
 
     const auto syms = symbols();
     c.imports_by_addr.reserve(syms.size());
@@ -58,7 +60,9 @@ const Binary::LookupCaches& Binary::caches() const {
         if (section_marker(a) != section_marker(b)) return !section_marker(a);
         return by_addr_name_size(a, b);
     });
-    return c;
+    caches_ = std::move(built);
+    caches_ready_.store(caches_.get(), std::memory_order_release);
+    return *caches_;
 }
 
 const Symbol* Binary::import_at_plt(addr_t plt_addr, unsigned slot_size) const noexcept {

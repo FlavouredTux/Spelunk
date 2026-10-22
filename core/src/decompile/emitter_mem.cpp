@@ -137,10 +137,35 @@ std::optional<i64> Emitter::resolve_imm(const IrValue& v) const {
     return std::nullopt;
 }
 
+bool Emitter::holds_named_local(const IrValue& v) const {
+    const auto key = ssa_key(v);
+    if (!key || (!merge_value_names.contains(*key) && !scoped_ssa_values.contains(*key))) {
+        return false;
+    }
+    // Looking through is only wrong when an operand renders as a name that
+    // is reassigned: a merge local, or a scoped Phi (its edge copies).
+    const IrInst* d = def_stripped(v);
+    if (!d) return true;
+    for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
+        const auto source = ssa_key(d->srcs[i]);
+        if (!source) continue;
+        if (merge_value_names.contains(*source)) return true;
+        if (scoped_ssa_values.contains(*source)) {
+            const IrInst* source_def = ssa_uses.definition(*source);
+            if (!source_def || source_def->op == IrOp::Phi) return true;
+        }
+    }
+    return false;
+}
+
 std::optional<std::pair<IrValue, i64>>
 Emitter::try_base_plus_offset(const IrValue& addr) const {
     // Direct base with implicit 0 offset.
     if (addr.kind == IrValueKind::Reg || addr.kind == IrValueKind::Temp) {
+        // A named local holds this value itself. Its definition's operands
+        // may share a name that has since been reassigned (`p++` then
+        // `p[-1]`), so looking through it would address the wrong version.
+        if (holds_named_local(addr)) return std::pair{addr, static_cast<i64>(0)};
         if (const IrInst* d = def_stripped(addr);
             d && d->op == IrOp::Add && d->src_count >= 2) {
             if (auto r = resolve_imm(d->srcs[1])) {
@@ -182,7 +207,7 @@ Emitter::try_render_array_index(const IrValue& addr, IrType t, int depth,
 
     IrValue base = addr;
     i64     off  = 0;
-    if (const IrInst* d = def_stripped(addr);
+    if (const IrInst* d = holds_named_local(addr) ? nullptr : def_stripped(addr);
         d && (d->op == IrOp::Add || d->op == IrOp::Sub) && d->src_count >= 2) {
         const bool sub = (d->op == IrOp::Sub);
         if (auto r = resolve_imm(d->srcs[1])) {

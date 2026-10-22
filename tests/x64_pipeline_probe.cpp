@@ -120,6 +120,7 @@ std::expected<u64, std::string> invoke_fixture(
     const auto& name = found->second.name;
     if (name == "call_step") return (args[0] * 3) ^ args[1];
     if (name == "call_clobber") return args[0] ^ 0x55;
+    if (name == "call_note") return args[0] * 7 + args[1];
     if (name != "call_mutate" || args[0] > memory.size() || memory.size() - args[0] < 8)
         return std::unexpected("invalid call memory access");
     u64 old = 0;
@@ -138,7 +139,7 @@ int main(int argc, char** argv) {
     CallSpecs call_specs;
     for (const auto& [name, arity] : std::array{
             std::pair{"call_step", u8{2}}, std::pair{"call_mutate", u8{2}},
-            std::pair{"call_clobber", u8{1}}}) {
+            std::pair{"call_clobber", u8{1}}, std::pair{"call_note", u8{2}}}) {
         if (const auto* symbol = (*binary)->find_by_name(name))
             call_specs.emplace(symbol->addr, CallSpec{name, arity});
     }

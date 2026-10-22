@@ -6,6 +6,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -1061,9 +1062,15 @@ void Emitter::name_merge_values() {
             auto named = merge_value_names.find(*phi_key);
             if (named == merge_value_names.end()) continue;
             auto local = merge_locals.find(named->second);
-            if (local == merge_locals.end() ||
-                (local->second.role != SsaMergeLocalRole::Induction &&
-                 local->second.role != SsaMergeLocalRole::Index)) continue;
+            if (local == merge_locals.end()) continue;
+            // A web named for another role (a counter that also feeds the
+            // result) still needs its back-edge step, or the loop renders
+            // with no update at all. Take the step only when it consumes
+            // this very Phi and nothing else reads the Phi, so the old value
+            // is dead once the update is assigned.
+            const bool induction_role =
+                local->second.role == SsaMergeLocalRole::Induction ||
+                local->second.role == SsaMergeLocalRole::Index;
             for (const IrValue& operand : phi.phi_operands) {
                 IrValue step_value = operand;
                 const IrInst* step = def_of(step_value);
@@ -1084,6 +1091,19 @@ void Emitter::name_merge_values() {
                     has_immediate |= step->srcs[i].kind == IrValueKind::Imm;
                 }
                 if (!uses_local || !has_immediate) continue;
+                if (!induction_role) {
+                    const bool steps_this_phi = std::ranges::any_of(
+                        std::span(step->srcs.data(), 2), [&](const IrValue& source) {
+                            const auto key = ssa_key(source);
+                            return key && *key == *phi_key;
+                        });
+                    const auto users = ssa_uses.syntactic_user_positions(*phi_key);
+                    if (!steps_this_phi ||
+                        !std::ranges::all_of(users, [&](const auto& position) {
+                            return &fn->blocks[position.first].insts[position.second] == step;
+                        })) continue;
+                }
+                if (step_interferes_with_web(*step, local->second, *phi_key)) continue;
                 for (const IrValue& candidate : {operand, step_value, step->dst}) {
                     auto key = ssa_key(candidate);
                     if (!key || merge_value_names.contains(*key)) continue;
@@ -1175,6 +1195,198 @@ void Emitter::name_merge_values() {
                 }
                 merge_edge_assignments[predecessor->start].emplace_back(
                     named->second, *initializer);
+            }
+        }
+    }
+    cover_phi_edges();
+}
+
+void Emitter::collect_block_scopes(const Region& root) {
+    block_scopes.clear();
+    std::vector<int> path;
+    int next_scope = 0;
+    const auto walk = [&](this const auto& self, const Region& region) -> void {
+        if (region.kind == RegionKind::Block) {
+            block_scopes[region.block_start].push_back(path);
+            return;
+        }
+        // Every child of a branch, loop or switch renders in its own braces.
+        const bool scoped = region.kind == RegionKind::IfThen ||
+            region.kind == RegionKind::IfElse || region.kind == RegionKind::While ||
+            region.kind == RegionKind::DoWhile || region.kind == RegionKind::For ||
+            region.kind == RegionKind::Loop || region.kind == RegionKind::Switch;
+        for (const auto& child : region.children) {
+            if (!child) continue;
+            if (scoped) path.push_back(next_scope++);
+            self(*child);
+            if (scoped) path.pop_back();
+        }
+    };
+    walk(root);
+}
+
+bool Emitter::block_scope_encloses(addr_t outer, addr_t inner) const {
+    const auto outer_paths = block_scopes.find(outer);
+    const auto inner_paths = block_scopes.find(inner);
+    if (outer_paths == block_scopes.end() || inner_paths == block_scopes.end()) return false;
+    for (const auto& outer_path : outer_paths->second) {
+        for (const auto& inner_path : inner_paths->second) {
+            if (outer_path.size() > inner_path.size() ||
+                !std::equal(outer_path.begin(), outer_path.end(), inner_path.begin())) return false;
+        }
+    }
+    return true;
+}
+
+void Emitter::cover_phi_edges() {
+    merge_guarded_edge_assignments.clear();
+    if (!fn || merge_locals.empty()) return;
+    for (std::size_t bi = 0; bi < fn->blocks.size(); ++bi) {
+        const IrBlock& block = fn->blocks[bi];
+        for (const IrInst& phi : block.insts) {
+            if (phi.op != IrOp::Phi || phi.phi_operands.size() != phi.phi_preds.size()) continue;
+            const auto phi_key = ssa_key(phi.dst);
+            if (!phi_key) continue;
+            const auto named = merge_value_names.find(*phi_key);
+            if (named == merge_value_names.end()) continue;
+            const auto local = merge_locals.find(named->second);
+            if (local == merge_locals.end()) continue;
+            // Returns render the incoming value per return site; a Phi read
+            // only through other Phis matters when the web is read at all.
+            const auto read_outside_returns = [&](const SsaKey& key) {
+                return std::ranges::any_of(ssa_uses.visible_user_positions(key),
+                    [&](const auto& position) {
+                        return fn->blocks[position.first].insts[position.second].op != IrOp::Return;
+                    });
+            };
+            if (!ssa_uses.visible_user_positions(*phi_key).empty()
+                    ? !read_outside_returns(*phi_key)
+                    : std::ranges::none_of(local->second.keys, read_outside_returns)) continue;
+            const std::string& name = named->second;
+            for (std::size_t i = 0; i < phi.phi_operands.size(); ++i) {
+                const IrValue& operand = phi.phi_operands[i];
+                const auto pred_index = fn->block_at.find(phi.phi_preds[i]);
+                if (pred_index == fn->block_at.end()) continue;
+                const IrBlock& pred = fn->blocks[pred_index->second];
+                // Covered already: the same value, a coalesced feeder that
+                // assigns the local itself, or an existing edge copy.
+                const auto operand_key = ssa_key(operand);
+                if (operand_key && *operand_key == *phi_key) continue;
+                const IrInst* definition = def_of(operand);
+                if (operand_key) {
+                    const auto same = merge_value_names.find(*operand_key);
+                    if (same != merge_value_names.end() && same->second == name &&
+                        (!definition || definition->op == IrOp::Phi ||
+                         merge_assignment_name_for(*definition))) continue;
+                }
+                if (const auto edge = merge_edge_assignments.find(pred.start);
+                    edge != merge_edge_assignments.end() &&
+                    std::ranges::any_of(edge->second, [&](const auto& assignment) {
+                        return assignment.first == name;
+                    })) continue;
+                if (operand.kind == IrValueKind::Imm && local->second.initializer &&
+                    local->second.initializer->kind == IrValueKind::Imm &&
+                    local->second.initializer->imm == operand.imm) continue;
+                // A copy whose value would print a raw register (`r8_2`)
+                // names something the function never declares.
+                const auto reads_raw_register = [&](this const auto& self, const IrValue& value,
+                                                    int depth) -> bool {
+                    if (renders_raw_arch_reg_name(value)) return true;
+                    const IrInst* d = def_of(value);
+                    if (!d || depth > 6 || scoped_ssa_name(value) || !inlinable_op(d->op) ||
+                        d->op == IrOp::Load) return false;
+                    if (const auto key = ssa_key(value); key && merge_value_names.contains(*key)) {
+                        return false;
+                    }
+                    for (u8 s = 0; s < d->src_count && s < d->srcs.size(); ++s) {
+                        if (self(d->srcs[s], depth + 1)) return true;
+                    }
+                    return false;
+                };
+                if (operand.kind != IrValueKind::Imm &&
+                    (!definition || definition->op == IrOp::Clobber ||
+                     reads_raw_register(operand, 0))) continue;
+                if (edge_write_interferes_with_web(bi, local->second, *phi_key, operand_key)) continue;
+                // A value bound in a scope the copy is outside of (a loop
+                // body, at the loop's exit) is declared at function scope.
+                // So is one that is not pure arithmetic: a load must not be
+                // re-read at the copy, and an intrinsic read only here has
+                // no binding of its own.
+                const auto hoist_operand = [&] {
+                    const auto position = operand_key
+                        ? ssa_uses.definition_position(*operand_key) : std::nullopt;
+                    if (!position || merge_value_names.contains(*operand_key) ||
+                        scoped_ssa_values.contains(*operand_key)) return;
+                    const bool pure = definition && definition->op != IrOp::Load &&
+                        inlinable_op(definition->op);
+                    const bool bound_at_definition = definition &&
+                        ((definition->op == IrOp::Load && !should_inline(operand)) ||
+                         (definition->op == IrOp::Intrinsic && visible_use_count(operand) > 0));
+                    if ((pure || bound_at_definition) &&
+                        (position->first == pred_index->second ||
+                         block_scope_encloses(fn->blocks[position->first].start,
+                                              pred.start))) return;
+                    if (auto fallback = fallback_ssa_name(operand)) {
+                        scoped_ssa_values.emplace(*operand_key, std::pair{operand, *fallback});
+                        fold_return_expr.erase(*operand_key);
+                    }
+                };
+                if (pred.successors.size() == 1) {
+                    hoist_operand();
+                    merge_edge_assignments[pred.start].emplace_back(name, operand);
+                    continue;
+                }
+                if (pred.insts.empty() || pred.insts.back().op != IrOp::CondBranch ||
+                    pred.successors.size() != 2 || pred.successors[0] == pred.successors[1]) continue;
+                // The branch condition renders after the copy, so it must not
+                // read the local; nor may this copy's value read a local
+                // another copy on the edge assigns first.
+                std::set<std::string> condition_reads;
+                std::set<SsaKey> seen;
+                collect_merge_names_read(pred.insts.back().srcs[0], 0, condition_reads, seen);
+                if (condition_reads.contains(name)) continue;
+                std::set<std::string> value_reads;
+                seen.clear();
+                collect_merge_names_read(operand, 0, value_reads, seen);
+                auto& guarded = merge_guarded_edge_assignments[pred.start];
+                if (std::ranges::any_of(guarded, [&](const GuardedEdgeAssignment& other) {
+                        return other.target == block.start &&
+                            (value_reads.contains(other.name) || other.name == name);
+                    })) continue;
+                hoist_operand();
+                // The other edge copying the same value: one copy before the
+                // branch serves both.
+                const auto both_edges = std::ranges::find_if(guarded,
+                    [&](const GuardedEdgeAssignment& other) {
+                        return other.target != block.start && other.name == name &&
+                            same_value_key(other.value, operand);
+                    });
+                // Hoisted ahead of the other copies, it must not feed them,
+                // nor read what they assign.
+                const auto reads_name = [&](const IrValue& value) {
+                    std::set<std::string> reads;
+                    std::set<SsaKey> visited;
+                    collect_merge_names_read(value, 0, reads, visited);
+                    return reads.contains(name);
+                };
+                const auto edge = merge_edge_assignments.find(pred.start);
+                const bool hoistable = both_edges != guarded.end() &&
+                    std::ranges::all_of(value_reads, [&](const std::string& read) {
+                        return read == name;
+                    }) &&
+                    std::ranges::none_of(guarded, [&](const GuardedEdgeAssignment& other) {
+                        return &other != &*both_edges && reads_name(other.value);
+                    }) &&
+                    (edge == merge_edge_assignments.end() ||
+                     std::ranges::none_of(edge->second, [&](const auto& other) {
+                         return reads_name(other.second);
+                     }));
+                if (hoistable) {
+                    guarded.erase(both_edges);
+                    merge_edge_assignments[pred.start].emplace_back(name, operand);
+                    continue;
+                }
+                guarded.push_back({block.start, name, operand});
             }
         }
     }

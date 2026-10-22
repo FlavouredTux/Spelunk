@@ -212,6 +212,8 @@ fallback_materializations(const Emitter& e, const std::string& body) {
     const auto declared = declared_identifiers(body);
     e.ssa_uses.for_each_definition([&](const SsaKey&, const IrInst* definition) {
         if (!definition || definition->dst.kind != IrValueKind::Temp) return;
+        // Scoped values get their declaration at function scope.
+        if (e.scoped_ssa_name(definition->dst)) return;
         const std::string name = std::format("t{}", definition->dst.temp);
         if (!identifiers.contains(std::string_view(name)) || declared.contains(name)) return;
         std::string initializer;

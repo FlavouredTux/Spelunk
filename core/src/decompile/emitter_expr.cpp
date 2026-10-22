@@ -940,7 +940,8 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
 
         default:
             if (inlinable_op(inst.op) && inst.dst.kind == IrValueKind::Temp) {
-                if (visible_use_count(inst.dst) <= 1) return "";
+                if (visible_use_count(inst.dst) <= 1 &&
+                    !inline_crosses_merge_assignment(inst.dst)) return "";
                 if (stack_offset(inst.dst).has_value()) return "";
                 // Suppress the declaration when this temp's only consumers
                 // are flag-set instructions - those will inline the

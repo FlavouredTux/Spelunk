@@ -1,4 +1,5 @@
 // Inlining decisions, materialization and immediate formatting.
+#include <algorithm>
 #include <bit>
 #include <cctype>
 #include <cmath>
@@ -7,8 +8,10 @@
 #include <cstring>
 #include <format>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <spelunk/common/types.hpp>
 #include <spelunk/disasm/register.hpp>
@@ -97,6 +100,13 @@ bool Emitter::should_inline(const IrValue& v) const {
             return false;
         }
     }
+    // format_stmt binds such a value at its definition; flag feeders and
+    // low-byte carriers never bind there, so they stay inline.
+    if ((d->op == IrOp::Load ||
+         (!is_flag_feeder_temp(v) && !match_low_byte_setcc_merge(v))) &&
+        inline_crosses_merge_assignment(v)) {
+        return false;
+    }
     if (visible_use_count(v) > 1) {
         // Flag-feeder temps are an exception: their multiple uses are
         // all flag-set computations that themselves render inline.
@@ -118,6 +128,213 @@ bool Emitter::should_inline(const IrValue& v) const {
         return false;
     }
     return true;
+}
+
+const std::vector<bool>&
+Emitter::blocks_reachable_avoiding(std::size_t from, std::size_t avoid) const {
+    if (reachable_memo_fn != fn) {
+        reachable_from_memo.clear();
+        reachable_memo_fn = fn;
+    }
+    auto [it, inserted] = reachable_from_memo.try_emplace(std::pair{from, avoid});
+    if (!inserted) return it->second;
+    std::vector<bool>& reached = it->second;
+    reached.assign(fn->blocks.size(), false);
+    std::vector<std::size_t> pending{from};
+    while (!pending.empty()) {
+        const std::size_t current = pending.back();
+        pending.pop_back();
+        for (const addr_t successor : fn->blocks[current].successors) {
+            const auto found = fn->block_at.find(successor);
+            if (found == fn->block_at.end() || reached[found->second]) continue;
+            reached[found->second] = true;
+            if (found->second != avoid) pending.push_back(found->second);
+        }
+    }
+    return reached;
+}
+
+bool Emitter::edge_write_interferes_with_web(std::size_t target_block, const SsaMergeLocal& web,
+                                             const SsaKey& phi,
+                                             const std::optional<SsaKey>& value) const {
+    constexpr std::size_t kBlockEnd = static_cast<std::size_t>(-1);
+    for (const SsaKey& member : web.keys) {
+        if (member == phi || (value && member == *value)) continue;
+        const auto member_position = ssa_uses.definition_position(member);
+        if (!member_position) continue;
+        const auto [member_block, member_index] = *member_position;
+        // The write lands on entry to the target block; a read is stale when
+        // it can follow the write without the member being defined again.
+        const auto reads_stale = [&](std::size_t block, std::size_t index) {
+            if (member_block == target_block) return block == target_block && index < member_index;
+            if (block == target_block) return true;
+            if (block == member_block && index > member_index) return false;
+            return static_cast<bool>(blocks_reachable_avoiding(target_block, member_block)[block]);
+        };
+        for (const auto& [user_block, user_index] : ssa_uses.syntactic_user_positions(member)) {
+            const IrInst& user = fn->blocks[user_block].insts[user_index];
+            if (user.op == IrOp::Phi) {
+                for (std::size_t i = 0; i < user.phi_operands.size() && i < user.phi_preds.size(); ++i) {
+                    const auto operand = ssa_key(user.phi_operands[i]);
+                    if (!operand || *operand != member) continue;
+                    const auto pred = fn->block_at.find(user.phi_preds[i]);
+                    if (pred == fn->block_at.end() || reads_stale(pred->second, kBlockEnd)) return true;
+                }
+                continue;
+            }
+            if (reads_stale(user_block, user_index)) return true;
+        }
+    }
+    return false;
+}
+
+bool Emitter::step_interferes_with_web(const IrInst& step, const SsaMergeLocal& web,
+                                       const SsaKey& phi) const {
+    const auto step_key = ssa_key(step.dst);
+    const auto step_position = step_key ? ssa_uses.definition_position(*step_key) : std::nullopt;
+    if (!step_position) return true;
+    const auto [step_block, step_index] = *step_position;
+    constexpr std::size_t kBlockEnd = static_cast<std::size_t>(-1);
+    // The Phi itself counts: a read of it after the step (the loop test
+    // on the old counter after `i--`) would see the updated local.
+    std::vector<SsaKey> members = web.keys;
+    if (std::ranges::find(members, phi) == members.end()) members.push_back(phi);
+    for (const SsaKey& member : members) {
+        if (member == *step_key) continue;
+        const auto member_position = ssa_uses.definition_position(member);
+        if (!member_position) continue;
+        const auto [member_block, member_index] = *member_position;
+        // Reaching the member's own block runs its definition before any
+        // later read there.
+        const auto reads_stale = [&](std::size_t block, std::size_t index) {
+            if (block == step_block && step_index < index &&
+                !(block == member_block && step_index < member_index && member_index < index)) {
+                return true;
+            }
+            if (block == member_block && index > member_index) return false;
+            return static_cast<bool>(blocks_reachable_avoiding(step_block, member_block)[block]);
+        };
+        for (const auto& [user_block, user_index] : ssa_uses.syntactic_user_positions(member)) {
+            // A Phi reads its operand at the end of that operand's edge.
+            const IrInst& user = fn->blocks[user_block].insts[user_index];
+            if (user.op == IrOp::Phi) {
+                for (std::size_t i = 0; i < user.phi_operands.size() && i < user.phi_preds.size(); ++i) {
+                    const auto operand = ssa_key(user.phi_operands[i]);
+                    if (!operand || *operand != member) continue;
+                    const auto pred = fn->block_at.find(user.phi_preds[i]);
+                    if (pred == fn->block_at.end()) return true;
+                    if (reads_stale(pred->second, kBlockEnd)) return true;
+                }
+                continue;
+            }
+            if (reads_stale(user_block, user_index)) return true;
+        }
+    }
+    return false;
+}
+
+void Emitter::collect_merge_names_read(const IrValue& value, int depth,
+                                       std::set<std::string>& names,
+                                       std::set<SsaKey>& seen) const {
+    // Bound values read their binding instead, so the walk stops at them.
+    const auto value_key = ssa_key(value);
+    if (!value_key || !seen.insert(*value_key).second) return;
+    if (auto named = merge_value_names.find(*value_key); named != merge_value_names.end()) {
+        names.insert(named->second);
+        return;
+    }
+    if (depth > 8) return;
+    const IrInst* d = ssa_uses.definition(*value_key);
+    if (!d || d->op == IrOp::Call || d->op == IrOp::CallIndirect ||
+        d->op == IrOp::Clobber) return;
+    if (d->op == IrOp::Phi) {
+        for (const IrValue& operand : d->phi_operands) {
+            collect_merge_names_read(operand, depth + 1, names, seen);
+        }
+        return;
+    }
+    if (value.kind == IrValueKind::Temp && visible_use_count(value) > 1 &&
+        !is_flag_feeder_temp(value)) return;
+    for (u8 i = 0; i < d->src_count && i < d->srcs.size(); ++i) {
+        collect_merge_names_read(d->srcs[i], depth + 1, names, seen);
+    }
+}
+
+bool Emitter::inline_crosses_merge_assignment(const IrValue& v) const {
+    if (!fn || explicit_phi_copies || merge_locals.empty()) return false;
+    const auto key = ssa_key(v);
+    if (!key || merge_value_names.contains(*key)) return false;
+    if (crossing_memo_fn != fn || crossing_memo_names != merge_value_names.size()) {
+        crossing_memo.clear();
+        crossing_memo_fn = fn;
+        crossing_memo_names = merge_value_names.size();
+    }
+    if (auto found = crossing_memo.find(*key); found != crossing_memo.end()) {
+        return found->second;
+    }
+    const auto remember = [&](bool crosses) {
+        crossing_memo.emplace(*key, crosses);
+        return crosses;
+    };
+    const auto def_position = ssa_uses.definition_position(*key);
+    const auto users = ssa_uses.visible_user_positions(*key);
+    const IrInst* definition = ssa_uses.definition(*key);
+    if (!def_position || !definition || users.size() != 1) return remember(false);
+
+    std::set<std::string> names;
+    std::set<SsaKey> seen{*key};
+    for (u8 i = 0; i < definition->src_count && i < definition->srcs.size(); ++i) {
+        collect_merge_names_read(definition->srcs[i], 0, names, seen);
+    }
+    if (names.empty()) return remember(false);
+
+    const auto [def_block, def_index] = *def_position;
+    const auto [use_block, use_index] = users[0];
+    // Can an assignment at (block, index) run after the definition and
+    // before the use? A path back through the defining block recomputes
+    // the value, so only paths that avoid it count.
+    constexpr std::size_t kBlockEnd = static_cast<std::size_t>(-1);
+    const auto between = [&](std::size_t block, std::size_t index) {
+        if (def_block == use_block) {
+            return block == def_block && def_index < index && index < use_index;
+        }
+        if (block == def_block) return index > def_index;
+        if (block == use_block) {
+            return index < use_index ||
+                blocks_reachable_avoiding(use_block, def_block)[use_block];
+        }
+        return blocks_reachable_avoiding(def_block, def_block)[block] &&
+            blocks_reachable_avoiding(block, def_block)[use_block];
+    };
+    for (const std::string& name : names) {
+        const auto local = merge_locals.find(name);
+        if (local == merge_locals.end()) continue;
+        for (const SsaKey& member : local->second.keys) {
+            const IrInst* member_def = ssa_uses.definition(member);
+            const auto position = ssa_uses.definition_position(member);
+            if (!member_def || !position || member_def->op == IrOp::Phi) continue;
+            if (between(position->first, position->second)) return remember(true);
+        }
+        for (const auto& [pred, assignments] : merge_edge_assignments) {
+            if (std::ranges::none_of(assignments, [&](const auto& assignment) {
+                    return assignment.first == name;
+                })) continue;
+            const auto block = fn->block_at.find(pred);
+            if (block != fn->block_at.end() && between(block->second, kBlockEnd)) {
+                return remember(true);
+            }
+        }
+        for (const auto& [pred, assignments] : merge_guarded_edge_assignments) {
+            if (std::ranges::none_of(assignments, [&](const auto& assignment) {
+                    return assignment.name == name;
+                })) continue;
+            const auto block = fn->block_at.find(pred);
+            if (block != fn->block_at.end() && between(block->second, kBlockEnd)) {
+                return remember(true);
+            }
+        }
+    }
+    return remember(false);
 }
 
 std::optional<std::string> Emitter::fallback_ssa_name(const IrValue& v) const {
@@ -242,13 +459,19 @@ Emitter::format_merge_assignment(const IrInst& inst, std::string_view name) cons
                 return std::format("{}{};", name,
                                    increment ? "++" : "--");
             }
-            if ((inst.op == IrOp::Add || inst.op == IrOp::Sub) &&
+            // On a pointer local `++`/`+=` scale by the pointee, so a step
+            // that is not a whole element spells out the byte arithmetic.
+            const bool pointer_local = merge_local != merge_locals.end() &&
+                c_type_name_for(merge_local->second.type_value).ends_with('*');
+            if (!pointer_local && (inst.op == IrOp::Add || inst.op == IrOp::Sub) &&
                 delta->kind == IrValueKind::Imm && delta->imm == 1 &&
                 !is_float_type(inst.dst.type)) {
                 const char* sym = (inst.op == IrOp::Add) ? "++" : "--";
                 return std::format("{}{};", name, sym);
             }
-            return std::format("{} {}= {};", name, op_text, expr(*delta));
+            if (!pointer_local) {
+                return std::format("{} {}= {};", name, op_text, expr(*delta));
+            }
         }
     }
 

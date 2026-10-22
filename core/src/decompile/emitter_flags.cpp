@@ -190,6 +190,9 @@ bool Emitter::same_ssa(const IrValue& a, const IrValue& b) const noexcept {
 }
 
 std::optional<Emitter::SubOps> Emitter::match_sub_result(const IrValue& v) const {
+    // `i - 1 == 0` must not become `i == 1` once the difference was
+    // assigned back to `i` itself.
+    if (holds_named_local(v)) return std::nullopt;
     const IrInst* d = def_stripped(v);
     if (!d || d->op != IrOp::Sub || d->src_count < 2) return std::nullopt;
     return SubOps{d->srcs[0], d->srcs[1]};

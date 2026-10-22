@@ -102,7 +102,10 @@ void run_analysis_passes(Emitter& e, const StructuredFunction& sf,
     if (structured_render && sf.body) e.refine_call_return_regions(*sf.body);
     e.assign_synthetic_struct_types();
     e.infer_shared_call_return_types();
-    if (sf.body) e.collect_structured_return_values(*sf.body);
+    if (sf.body) {
+        e.collect_structured_return_values(*sf.body);
+        e.collect_block_scopes(*sf.body);
+    }
     {
         ScopedTimer timer("emit.name_merge_values");
         e.name_merge_values();

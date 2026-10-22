@@ -626,10 +626,15 @@ void Emitter::emit_loop_entry_assignments(const Region& r, int depth, std::strin
             const IrValue& operand = phi.phi_operands[i];
             const auto predecessor = fn->block_at.find(phi.phi_preds[i]);
             const auto edge = merge_edge_assignments.find(phi.phi_preds[i]);
+            const auto guarded = merge_guarded_edge_assignments.find(phi.phi_preds[i]);
             usable = predecessor != fn->block_at.end() &&
                 (edge == merge_edge_assignments.end() ||
                  std::ranges::none_of(edge->second, [&](const auto& assignment) {
                      return assignment.first == named->second;
+                 })) &&
+                (guarded == merge_guarded_edge_assignments.end() ||
+                 std::ranges::none_of(guarded->second, [&](const auto& assignment) {
+                     return assignment.name == named->second;
                  })) &&
                 (!seed || same_value_key(*seed, operand) ||
                  (seed->kind == IrValueKind::Imm && operand.kind == IrValueKind::Imm &&

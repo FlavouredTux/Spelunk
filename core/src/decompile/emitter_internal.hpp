@@ -202,6 +202,14 @@ struct Emitter {
     std::set<std::string>                            definitely_assigned_merge_locals;
     std::map<addr_t, std::vector<std::pair<std::string, IrValue>>>
                                                     merge_edge_assignments;
+    // Copies for one outgoing edge of a conditional block, rendered as
+    // `if (edge condition) { name = value; }` after the block.
+    struct GuardedEdgeAssignment {
+        addr_t      target = 0;
+        std::string name;
+        IrValue     value;
+    };
+    std::map<addr_t, std::vector<GuardedEdgeAssignment>> merge_guarded_edge_assignments;
     // Block addresses referenced by some `RegionKind::Goto` in the
     // structured tree. emit_block prepends a C `bb_<addr>:` label at
     // these blocks so the gotos resolve. Without this the structurer's
@@ -955,6 +963,52 @@ struct Emitter {
     [[nodiscard]] bool is_flag_feeder_temp(const IrValue& v) const;
 
     [[nodiscard]] bool should_inline(const IrValue& v) const;
+
+    // The value renders as a named local (merge web or scoped SSA name)
+    // whose definition reads a name that can be reassigned before a later
+    // use (`p++` then `p[-1]`). Address and comparison folding must not
+    // look through it.
+    [[nodiscard]] bool holds_named_local(const IrValue& v) const;
+
+    // True when a single-use value's inlined expression reads a merge local
+    // that some assignment can overwrite between the definition and the use
+    // (typically a loop-invariant computed before a loop that updates the
+    // local). Such a value must bind at its definition.
+    [[nodiscard]] bool inline_crosses_merge_assignment(const IrValue& v) const;
+    // Blocks reachable from `from` over at least one edge, never leaving
+    // through `avoid` (which is still marked when reached).
+    [[nodiscard]] const std::vector<bool>&
+    blocks_reachable_avoiding(std::size_t from, std::size_t avoid) const;
+    // Would assigning `step` to the web's local overwrite a member that is
+    // still read later (a pre-loop value used after the loop)?
+    [[nodiscard]] bool step_interferes_with_web(const IrInst& step,
+                                                const SsaMergeLocal& web,
+                                                const SsaKey& phi) const;
+    // Would writing the web's local on entry to `target_block` (a Phi
+    // edge) overwrite a member other than `phi`/`value` that is read later?
+    [[nodiscard]] bool edge_write_interferes_with_web(std::size_t target_block,
+                                                      const SsaMergeLocal& web,
+                                                      const SsaKey& phi,
+                                                      const std::optional<SsaKey>& value) const;
+    // Merge locals an inlined rendering of `value` reads.
+    void collect_merge_names_read(const IrValue& value, int depth,
+                                  std::set<std::string>& names,
+                                  std::set<SsaKey>& seen) const;
+    // Give named Phis an explicit edge copy wherever nothing else assigns
+    // the incoming value (a loop's back edge or exit), so the local holds
+    // what the Phi says it holds.
+    void cover_phi_edges();
+    // Brace nesting of each rendered block in the structured tree (one
+    // path per occurrence), for deciding whether a value bound in one
+    // block is still in scope in another.
+    std::map<addr_t, std::vector<std::vector<int>>> block_scopes;
+    void collect_block_scopes(const Region& root);
+    [[nodiscard]] bool block_scope_encloses(addr_t outer, addr_t inner) const;
+    mutable const IrFunction* reachable_memo_fn = nullptr;
+    mutable std::map<SsaKey, bool> crossing_memo;
+    mutable const IrFunction* crossing_memo_fn = nullptr;
+    mutable std::size_t crossing_memo_names = 0;
+    mutable std::map<std::pair<std::size_t, std::size_t>, std::vector<bool>> reachable_from_memo;
 
     [[nodiscard]] std::optional<std::string> fallback_ssa_name(const IrValue& v) const;
 

@@ -99,3 +99,35 @@ uint64_t loop_call_exit(uint64_t n, uint64_t stop, uint64_t seed) {
     }
     return seed;
 }
+
+/* Loop-carried locals whose web also holds a pre-loop value: the back edge
+ * and the exit both need explicit copies, and the pre-loop value must not
+ * be clobbered by the loop's updates. */
+extern uint64_t call_note(uint64_t, ...);
+uint64_t loop_string_bound(const unsigned char* s, uint64_t flag, uint64_t extra) {
+    uint64_t total = call_note(1, flag);
+    if (flag) total = extra + 20;
+    if (s) {
+        do total++; while (*s++);
+    }
+    return total * 3 + (flag ? 1 : 0);
+}
+uint64_t loop_mix_keep_start(unsigned char* p, uint64_t n, uint64_t tail) {
+    unsigned char* start = p;
+    unsigned char acc = (unsigned char)call_note(2, n);
+    if ((int64_t)n > 0) {
+        unsigned char* q = p;
+        do { acc = (unsigned char)(acc * 31 + *q); *q = acc; q++; } while (q != p + n);
+        p += n;
+    }
+    *p = (unsigned char)tail;
+    return ((uint64_t)(p - start) + tail) * 256 + acc;
+}
+uint64_t loop_copy_string(unsigned char* dst, const unsigned char* src, uint64_t extra) {
+    unsigned char* start = dst;
+    uint64_t salt = call_note(4, extra);
+    unsigned char c;
+    do { c = *src++; *dst++ = (unsigned char)(c ^ salt); } while (c);
+    *dst = (unsigned char)extra;
+    return (uint64_t)(dst - start) + (uint64_t)(src - start);
+}

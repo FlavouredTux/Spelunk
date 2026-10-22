@@ -54,6 +54,7 @@ HELPERS = r'''
 extern uint64_t call_step(uint64_t, uint64_t);
 extern uint64_t call_mutate(uint64_t*, uint64_t);
 extern uint64_t call_clobber(uint64_t);
+extern uint64_t call_note(uint64_t, ...);
 static uint64_t helper_high(uint64_t a, uint64_t b) {
     return (uint64_t)(((unsigned __int128)a * b) >> 64);
 }
@@ -170,6 +171,20 @@ def main(directory):
         for q in [16, 17, 19, 23, 24, 48]:
             for value in [0, 0xff, 0x7f]:
                 cases.append(Case('alias_byte', (16, q, value), initial, (0, 1)))
+        # NUL-terminated strings of several lengths inside the buffer.
+        # Offset 0 would be NULL to the IR oracle's flat memory.
+        for length in [0, 1, 2, 7, 30]:
+            text = bytearray(initial)
+            for i in range(8, 8 + length):
+                text[i] = text[i] or 1
+            text[8 + length] = 0
+            for flag in [0, 1]:
+                cases.append(Case('loop_string_bound', (8, flag, 5), bytes(text), (0,)))
+            cases.append(Case('loop_copy_string', (64, 8, 0x5a), bytes(text), (0, 1)))
+        for n in [0, 1, 2, 5, 17, MASK]:
+            cases.append(Case('loop_mix_keep_start', (8, n, 0x3c), initial, (0,)))
+    for flag in [0, 1]:
+        cases.append(Case('loop_string_bound', (0, flag, 9)))
     names = sorted({case.name for case in cases})
 
     code = HELPERS

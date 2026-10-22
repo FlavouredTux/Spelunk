@@ -961,9 +961,8 @@ void Emitter::emit_merge_edge_assignments(addr_t block_start, std::string_view i
             emit_phi_copies(fn->blocks[block->second], ind, out);
         if (explicit_phi_copies) return;
     }
-    auto assignments = merge_edge_assignments.find(block_start);
-    if (assignments == merge_edge_assignments.end()) return;
-    for (const auto& [name, value] : assignments->second) {
+    const auto render_value = [&](const std::string& name, const IrValue& value) {
+        if (const auto* scoped = scoped_ssa_name(value)) return *scoped;
         std::string rendered;
         if (auto payload = low_byte_return_payload(value); payload) {
             rendered = expr(*payload);
@@ -984,7 +983,41 @@ void Emitter::emit_merge_edge_assignments(addr_t block_start, std::string_view i
                 rendered = std::format("({}){}", type, rendered);
             }
         }
-        out += std::format("{}{} = {};\n", ind, name, rendered);
+        return rendered;
+    };
+    if (auto assignments = merge_edge_assignments.find(block_start);
+        assignments != merge_edge_assignments.end()) {
+        for (const auto& [name, value] : assignments->second) {
+            const std::string rendered = render_value(name, value);
+            emit_materializations_for_rendered_value(value, rendered, out, ind);
+            out += std::format("{}{} = {};\n", ind, name, rendered);
+        }
+    }
+    const auto guarded = merge_guarded_edge_assignments.find(block_start);
+    const auto block = fn->block_at.find(block_start);
+    if (guarded == merge_guarded_edge_assignments.end() || block == fn->block_at.end()) return;
+    const IrInst& terminator = fn->blocks[block->second].insts.back();
+    std::vector<addr_t> targets;
+    for (const auto& assignment : guarded->second) {
+        if (std::ranges::find(targets, assignment.target) == targets.end()) {
+            targets.push_back(assignment.target);
+        }
+    }
+    // Bindings the condition or values need are emitted before the `if`,
+    // where the branch would otherwise first materialize them.
+    const std::string inner = std::string(ind) + "  ";
+    for (const addr_t target : targets) {
+        const std::string condition =
+            render_condition(terminator.srcs[0], target != terminator.target1);
+        emit_materializations_for_rendered_value(terminator.srcs[0], condition, out, ind);
+        std::string copies;
+        for (const auto& assignment : guarded->second) {
+            if (assignment.target != target) continue;
+            const std::string rendered = render_value(assignment.name, assignment.value);
+            emit_materializations_for_rendered_value(assignment.value, rendered, out, ind);
+            copies += std::format("{}{} = {};\n", inner, assignment.name, rendered);
+        }
+        out += std::format("{}if ({}) {{\n{}{}}}\n", ind, condition, copies, ind);
     }
 }
 

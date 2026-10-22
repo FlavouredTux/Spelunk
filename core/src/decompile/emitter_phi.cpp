@@ -124,6 +124,9 @@ bool Emitter::prepare_scalar_join_copies() {
     }
     if (phis.empty()) return false;
     std::set<std::string> replaced;
+    // Values hoisted for edge copies are already scoped; number after them
+    // as if they were not there.
+    const std::size_t hoisted = scoped_ssa_values.size();
     const auto remember = [&](const IrValue& original, std::string_view prefix) {
         const auto key = ssa_key(original);
         if (!key || scoped_ssa_values.contains(*key)) return;
@@ -131,7 +134,7 @@ bool Emitter::prepare_scalar_join_copies() {
         if (!type) return;
         IrValue value = original;
         value.type = *type;
-        std::string name = std::format("{}_{}", prefix, scoped_ssa_values.size());
+        std::string name = std::format("{}_{}", prefix, scoped_ssa_values.size() - hoisted);
         while (std::ranges::find(self_arg_names, name) != self_arg_names.end()) name += "_";
         scoped_ssa_values.emplace(*key, std::pair{value, std::move(name)});
         if (auto old = merge_value_names.find(*key); old != merge_value_names.end()) {
@@ -146,6 +149,9 @@ bool Emitter::prepare_scalar_join_copies() {
         }
     }
     for (const auto& name : replaced) merge_locals.erase(name);
+    for (auto& [_, copies] : merge_guarded_edge_assignments) {
+        std::erase_if(copies, [&](const auto& copy) { return replaced.contains(copy.name); });
+    }
     for (auto& [_, copies] : merge_edge_assignments) {
         std::erase_if(copies, [&](const auto& copy) { return replaced.contains(copy.first); });
     }
@@ -290,6 +296,7 @@ void Emitter::prepare_phi_copies() {
     merge_value_names.clear();
     merge_locals.clear();
     merge_edge_assignments.clear();
+    merge_guarded_edge_assignments.clear();
     for_update_positions.clear();
 
     std::map<SsaKey, std::pair<addr_t, const IrInst*>> definitions;

@@ -283,6 +283,21 @@ bool is_esp(const Operand& op) {
     return op.kind == Operand::Kind::Register && canonical_reg(op.reg) == Reg::Rsp;
 }
 
+// `push ebx/esi/edi/ebp`: how a prologue saves the registers it will use.
+bool is_callee_saved_push(const Instruction& insn) {
+    if (insn.mnemonic != Mnemonic::Push || insn.num_operands != 1 ||
+        insn.operands[0].kind != Operand::Kind::Register) return false;
+    const Reg reg = canonical_reg(insn.operands[0].reg);
+    return reg == Reg::Rbx || reg == Reg::Rsi || reg == Reg::Rdi || reg == Reg::Rbp;
+}
+
+// `mov ebp, esp`.
+bool is_frame_setup(const Instruction& insn) {
+    return insn.mnemonic == Mnemonic::Mov && insn.num_operands == 2 &&
+           insn.operands[0].kind == Operand::Kind::Register &&
+           canonical_reg(insn.operands[0].reg) == Reg::Rbp && is_esp(insn.operands[1]);
+}
+
 // Stack-pointer offset from entry for every SSA value derived from it, by
 // constant propagation over the SSA graph. Phis whose paths disagree, and
 // values not derived from the entry stack pointer, have no offset.
@@ -572,49 +587,151 @@ std::optional<u16> x86_callee_pop(const Binary& binary, addr_t target) {
     return convention_of(binary, memo_for(binary), target, 0).pop;
 }
 
+bool mentions_esp(const Instruction& insn) {
+    for (std::size_t i = 0; i < insn.num_operands; ++i) {
+        const auto& op = insn.operands[i];
+        if (is_esp(op)) return true;
+        if (op.kind == Operand::Kind::Memory &&
+            (canonical_reg(op.mem.base) == Reg::Rsp || canonical_reg(op.mem.index) == Reg::Rsp))
+            return true;
+    }
+    return insn.mnemonic == Mnemonic::Push || insn.mnemonic == Mnemonic::Pop;
+}
+
+// Writes registers it does not name: a register it holds cannot be traced
+// through these.
+bool has_implicit_register_writes(Mnemonic mnemonic) {
+    switch (mnemonic) {
+        case Mnemonic::Movsb: case Mnemonic::Movsd: case Mnemonic::Movsq:
+        case Mnemonic::Stosb: case Mnemonic::Stosd: case Mnemonic::Stosq:
+        case Mnemonic::Lodsb: case Mnemonic::Lodsd: case Mnemonic::Lodsq:
+        case Mnemonic::Scasb: case Mnemonic::Scasd: case Mnemonic::Scasq:
+        case Mnemonic::Cmpsb: case Mnemonic::Cmpsd: case Mnemonic::Cmpsq:
+        case Mnemonic::Mul: case Mnemonic::Div: case Mnemonic::Idiv:
+        case Mnemonic::Cdq: case Mnemonic::Cpuid: case Mnemonic::Rdtsc:
+        case Mnemonic::Xchg:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// The memory slot `call reg` reaches: `mov esi, [__imp__X]` once, then
+// `call esi` - MSVC's habit for an import called repeatedly - or gcc's
+// `mov ebp, [__imp__X]` hoisted above a loop. Every path into the call
+// must load the register from the same absolute slot.
+std::optional<addr_t> register_call_slot(const Function& fn, std::size_t block_index,
+                                         std::size_t end, Reg reg) {
+    enum class Answer { Unknown, Slot, Conflict };
+    std::optional<addr_t> slot;
+    std::set<std::size_t> visited;
+    const bool caller_saved = reg == Reg::Rax || reg == Reg::Rcx || reg == Reg::Rdx;
+    const auto walk = [&](this const auto& self, std::size_t index, std::size_t limit) -> Answer {
+        const auto& insns = fn.blocks[index].instructions;
+        for (std::size_t j = limit; j-- > 0;) {
+            const auto& prior = insns[j];
+            if (has_implicit_register_writes(prior.mnemonic)) return Answer::Conflict;
+            if (prior.mnemonic == Mnemonic::Call) {
+                if (caller_saved) return Answer::Conflict;
+                continue;
+            }
+            if (prior.num_operands == 0 || prior.operands[0].kind != Operand::Kind::Register ||
+                canonical_reg(prior.operands[0].reg) != reg) continue;
+            if (prior.mnemonic == Mnemonic::Cmp || prior.mnemonic == Mnemonic::Test ||
+                prior.mnemonic == Mnemonic::Push) continue;
+            const auto& source = prior.num_operands == 2 ? prior.operands[1] : prior.operands[0];
+            if (prior.mnemonic != Mnemonic::Mov || source.kind != Operand::Kind::Memory ||
+                source.mem.base != Reg::None || source.mem.index != Reg::None ||
+                !source.mem.has_disp) return Answer::Conflict;
+            const auto found = static_cast<addr_t>(static_cast<u32>(source.mem.disp));
+            if (slot && *slot != found) return Answer::Conflict;
+            slot = found;
+            return Answer::Slot;
+        }
+        if (fn.blocks[index].start == fn.start || fn.blocks[index].predecessors.empty())
+            return Answer::Conflict;
+        bool any = false;
+        for (addr_t predecessor : fn.blocks[index].predecessors) {
+            const auto at = fn.block_at.find(predecessor);
+            if (at == fn.block_at.end()) return Answer::Conflict;
+            if (!visited.insert(at->second).second) continue;
+            const Answer answer = self(at->second, fn.blocks[at->second].instructions.size());
+            if (answer == Answer::Conflict) return Answer::Conflict;
+            any = any || answer == Answer::Slot;
+        }
+        return any ? Answer::Slot : Answer::Unknown;
+    };
+    visited.insert(block_index);
+    return walk(block_index, end) == Answer::Slot ? slot : std::nullopt;
+}
+
 std::unordered_map<addr_t, u16> x86_call_pops(const Binary& binary, const Function& fn) {
     auto& memo = memo_for(binary);
     std::unordered_map<addr_t, u16> pops;
-    for (const auto& block : fn.blocks) {
+    for (std::size_t block_index = 0; block_index < fn.blocks.size(); ++block_index) {
+        const auto& block = fn.blocks[block_index];
         const auto& insns = block.instructions;
         for (std::size_t i = 0; i < insns.size(); ++i) {
             const auto& insn = insns[i];
             if (insn.mnemonic != Mnemonic::Call) continue;
-            const auto target = call_target(insn);
+            auto target = call_target(insn);
+            if (!target && insn.num_operands == 1 &&
+                insn.operands[0].kind == Operand::Kind::Register) {
+                target = register_call_slot(fn, block_index, i,
+                                            canonical_reg(insn.operands[0].reg));
+            }
             const Convention convention = target
                 ? convention_of(binary, memo, *target, 0) : Convention{};
             std::optional<u16> pop = convention.pop;
             if (!pop) {
-                // gcc re-reserves the outgoing area a callee popped.
-                const Instruction* next = i + 1 < insns.size() ? &insns[i + 1] : nullptr;
-                if (!next) {
-                    const auto after = fn.block_at.find(insn.address + insn.length);
-                    if (after != fn.block_at.end() &&
-                        !fn.blocks[after->second].instructions.empty()) {
-                        next = &fn.blocks[after->second].instructions.front();
+                // gcc re-reserves the outgoing area a callee popped, perhaps
+                // after moving the result somewhere (`mov esi, eax`).
+                const std::vector<Instruction>* run = &insns;
+                std::size_t next = i + 1;
+                for (unsigned seen = 0; seen < 4; ++seen, ++next) {
+                    if (next == run->size()) {
+                        const auto after = fn.block_at.find(insn.address + insn.length);
+                        if (run != &insns || after == fn.block_at.end()) break;
+                        run = &fn.blocks[after->second].instructions;
+                        next = 0;
+                        if (run->empty()) break;
                     }
-                }
-                if (next && next->mnemonic == Mnemonic::Sub && next->num_operands == 2 &&
-                    is_esp(next->operands[0]) &&
-                    next->operands[1].kind == Operand::Kind::Immediate) {
-                    pop = static_cast<u16>(next->operands[1].imm.value);
+                    const auto& following = (*run)[next];
+                    if (following.mnemonic == Mnemonic::Sub && following.num_operands == 2 &&
+                        is_esp(following.operands[0]) &&
+                        following.operands[1].kind == Operand::Kind::Immediate) {
+                        pop = static_cast<u16>(following.operands[1].imm.value);
+                        break;
+                    }
+                    if (mentions_esp(following) || ends_basic_block(following.mnemonic) ||
+                        following.mnemonic == Mnemonic::Call) break;
                 }
             }
             if (!pop && convention.abi == Abi::Win32Stdcall) {
-                // A stdcall callee pops what was pushed for it.
+                // A stdcall callee pops what was pushed for it - but not the
+                // callee-saved registers the prologue pushed just before it
+                // (`sub esp, 0x58; push ebx; push esi; push edi; call
+                // [GetVersion]`).
                 unsigned pushed = 0;
+                unsigned saves = 0;  // saves adjacent to where the walk stops
+                bool prologue = block.start == fn.start;
                 for (std::size_t j = i; j-- > 0;) {
                     const auto& prior = insns[j];
                     if (prior.mnemonic == Mnemonic::Push) {
-                        pushed += prior.prefixes.opsize ? 2u : 4u;
+                        const unsigned bytes = prior.prefixes.opsize ? 2u : 4u;
+                        pushed += bytes;
+                        saves = is_callee_saved_push(prior) ? saves + bytes : 0;
                         continue;
                     }
-                    if (prior.mnemonic == Mnemonic::Call ||
-                        (prior.num_operands && is_esp(prior.operands[0]))) {
+                    if (prior.mnemonic == Mnemonic::Call) {
+                        prologue = false;
                         break;
                     }
+                    if (prior.num_operands && is_esp(prior.operands[0])) break;
+                    if (is_frame_setup(prior)) break;
+                    saves = 0;
                 }
-                pop = static_cast<u16>(pushed);
+                pop = static_cast<u16>(pushed - (prologue ? saves : 0));
             }
             if (pop.value_or(0)) pops[insn.address] = *pop;
         }

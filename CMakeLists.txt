@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(spelunk
-    VERSION 1.3.0
+    VERSION 2.0.0
     DESCRIPTION "Spelunk - reverse engineering toolkit"
     LANGUAGES C CXX
 )

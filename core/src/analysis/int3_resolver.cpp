@@ -194,7 +194,7 @@ is_flag_setting(Mnemonic mn) noexcept {
 // instructions or run out of bytes. Returns the decoded instructions.
 [[nodiscard]] std::vector<Instruction>
 decode_window(const Binary& b, addr_t va, unsigned count) {
-    const X64Decoder dec;
+    const X64Decoder dec(b.arch() != Arch::X86);
     std::vector<Instruction> out;
     addr_t pc = va;
     for (unsigned i = 0; i < count; ++i) {
@@ -222,7 +222,7 @@ decode_window(const Binary& b, addr_t va, unsigned count) {
 [[nodiscard]] std::optional<BranchPredicate>
 recover_predicate(const Binary& b, addr_t int3_addr, addr_t fn_entry) {
     // Decode 8 instructions before the int3.
-    const X64Decoder dec;
+    const X64Decoder dec(b.arch() != Arch::X86);
     std::vector<Instruction> before;
     addr_t pc = fn_entry;
     // Walk from function entry to the int3, collecting instructions.
@@ -274,7 +274,7 @@ resolve_embedded_int3s(const Binary& b) {
     }
 
     const auto ad_imports = find_anti_debug_imports(b);
-    const X64Decoder dec;
+    const X64Decoder dec(b.arch() != Arch::X86);
 
     std::vector<Int3Resolution> out;
 

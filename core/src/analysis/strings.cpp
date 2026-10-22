@@ -153,7 +153,7 @@ scan_strings_impl(const Binary &b, const StringScanOptions &options,
     // callers). Better than the prior silent miscount where each
     // discovered fn's bytes failed to decode and advanced one byte at a
     // time forever.
-    if (b.arch() != Arch::X86_64)
+    if (b.arch() != Arch::X86_64 && b.arch() != Arch::X86)
         return results;
 
     // Walk every defined function + every discovered function (deduped
@@ -208,7 +208,7 @@ scan_strings_impl(const Binary &b, const StringScanOptions &options,
     std::vector<std::vector<StringRef>> refs_by_worker(workers);
     std::atomic<std::size_t> next{0};
     auto scan_work = [&](std::size_t worker) {
-        X64Decoder dec;
+        X64Decoder dec(b.arch() != Arch::X86);
         auto& refs = refs_by_worker[worker];
         while (true) {
             const std::size_t index = next.fetch_add(1, std::memory_order_relaxed);

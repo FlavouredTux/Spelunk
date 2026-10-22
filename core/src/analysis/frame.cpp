@@ -124,7 +124,7 @@ callee_writes_only_to_arg(const Binary& binary, addr_t target, Reg arg,
     if (!symbol || target > std::numeric_limits<addr_t>::max() - symbol->size)
         return std::nullopt;
 
-    X64Decoder decoder;
+    X64Decoder decoder(binary.arch() != Arch::X86);
     CfgBuilder builder(binary, decoder, false);
     builder.seed_known_entries(std::move(entries));
     auto function = builder.build(target);

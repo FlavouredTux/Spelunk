@@ -389,7 +389,7 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
         // Tiny sections (or low core counts) - just sweep serially.
         constexpr std::size_t kSerialThreshold = 1 << 20;     // 1 MB
         if (scope_size < kSerialThreshold || target_workers <= 1) {
-            X64Decoder dec;
+            X64Decoder dec(b.arch() != Arch::X86);
             per_section_hits.push_back(
                 sweep_section_chunk(data, base, scope_off_lo, scope_off_hi, dec));
             continue;
@@ -415,7 +415,7 @@ std::vector<addr_t> discover_from_prologues(const Binary& b, addr_t lo, addr_t h
                 ? raw_end
                 : std::min(scope_off_hi, raw_end + kOverlap);
             threads.emplace_back([&, i, begin, end]() {
-                X64Decoder dec;
+                X64Decoder dec(b.arch() != Arch::X86);
                 chunk_hits[i] = sweep_section_chunk(data, base, begin, end, dec);
             });
         }

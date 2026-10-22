@@ -455,7 +455,7 @@ infer_ppc_arguments_from_ir(IrCache& cache, const Binary& b,
 
 [[nodiscard]] std::optional<addr_t>
 follow_trivial_wrapper(const Binary& b, addr_t target) noexcept {
-    X64Decoder dec;
+    X64Decoder dec(b.arch() != Arch::X86);
 
     auto decode_at = [&](addr_t ip) -> std::optional<Instruction> {
         auto span = b.bytes_at(ip);
@@ -607,7 +607,7 @@ static u8 infer_arity_impl(const Binary& b, addr_t target, Abi abi,
     std::vector<WorkItem> work;
     work.push_back({target, 0});
 
-    X64Decoder dec;
+    X64Decoder dec(b.arch() != Arch::X86);
     std::size_t visits = 0;
     TypeArena import_types;
 

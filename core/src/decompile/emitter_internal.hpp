@@ -990,6 +990,15 @@ struct Emitter {
     // look through it.
     [[nodiscard]] bool holds_named_local(const IrValue& v) const;
 
+    // `rendered` converted between a vector register and its lane 0 when
+    // `use` reads the register at a different width than its definition.
+    [[nodiscard]] std::string adapt_vector_lane(const IrValue& use, std::string rendered) const;
+
+    // {`(__m128i*)(addr)`, store intrinsic} for a 128/256-bit access that
+    // must not be rendered as an aligned dereference.
+    [[nodiscard]] std::optional<std::pair<std::string, std::string>>
+    unaligned_vector_access(const IrValue& addr, IrType type, Reg segment) const;
+
     // True when a single-use value's inlined expression reads a merge local
     // that some assignment can overwrite between the definition and the use
     // (typically a loop-invariant computed before a loop that updates the

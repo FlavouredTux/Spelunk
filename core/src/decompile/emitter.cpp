@@ -233,10 +233,13 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
     struct ReturnTypeCandidate {
         IrValue value;
         bool    widened_from_narrow = false;
+        // The ABI register holds the narrow value extended this way, so a
+        // narrowed return type needs the matching signedness.
+        std::optional<bool> sign_extended;
     };
 
     auto return_type_value = [&](IrValue v) {
-        ReturnTypeCandidate candidate{v};
+        ReturnTypeCandidate candidate{v, false, std::nullopt};
         for (int depth = 0; depth < 8; ++depth) {
             const IrInst* d = e.def_of(v);
             if (!d || d->src_count < 1) break;
@@ -250,6 +253,7 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
                 v = d->srcs[0];
                 candidate.value = v;
                 candidate.widened_from_narrow = true;
+                if (!candidate.sign_extended) candidate.sign_extended = d->op == IrOp::SExt;
             }
             if (d->op == IrOp::Phi && !d->phi_operands.empty()) {
                 std::optional<IrValue> representative;
@@ -375,7 +379,12 @@ infer_return_type(const Emitter& e, const StructuredFunction& sf) {
     const ReturnTypeCandidate& picked =
         refined ? *refined : (narrowed ? *narrowed : candidates.front());
     const IrValue& picked_value = picked.value;
-    return e.c_type_name_for(picked_value);
+    std::string type = e.c_type_name_for(picked_value);
+    if (picked.sign_extended && type.ends_with("_t")) {
+        if (*picked.sign_extended && type.starts_with("uint")) type.erase(0, 1);
+        else if (!*picked.sign_extended && type.starts_with("int")) type.insert(0, "u");
+    }
+    return type;
 }
 
 // Pick a display name: user rename beats binary symbol beats the

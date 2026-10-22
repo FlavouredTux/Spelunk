@@ -927,6 +927,23 @@ Builder::make_return_from_block(const IrBlock& bb, addr_t from_pred) {
         const auto substantive = [&](const auto& self, const IrValue& value,
                                      int depth) -> bool {
             if (depth > 16) return false;
+            // A constant (`xor eax, eax`, folded to `return 0`) or another
+            // register's incoming value (an argument passed through) is a
+            // real result. Only the return register's own untouched entry
+            // value is noise.
+            if (value.kind == IrValueKind::Imm) return true;
+            if (value.kind == IrValueKind::Reg && value.version == 0) {
+                // Cleanup may have propagated `rax = rdx` into the return
+                // itself, so judge the leaf by its register: a return
+                // register the function never wrote is noise, another
+                // register is an argument passed through.
+                const Reg leaf = canonical_reg(value.reg);
+                for (const Reg lane : {Reg::Rax, Reg::Xmm0, Reg::St0, Reg::PpcR3,
+                                       Reg::PpcF1, Reg::X0, Reg::V0, Reg::ArmR0}) {
+                    if (leaf == canonical_reg(lane)) return false;
+                }
+                return depth > 0 || v.kind == IrValueKind::Reg;
+            }
             auto key = ssa_key(value);
             if (!key || !seen.insert(*key).second) return false;
             auto found = defs_.find(*key);

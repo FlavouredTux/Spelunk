@@ -120,12 +120,28 @@ std::optional<IrType> Emitter::cached_fp_return_type(addr_t target) const {
         if (inst.src_count < 2) return result;
         const auto* integer = producer(inst.srcs[0]);
         const auto* floating = producer(inst.srcs[1]);
+        // `xor eax, eax` before `ret` (a constant integer result) is
+        // evidence for the integer lane, whatever XMM0 last held.
+        if (!is_x86_32_abi(abi) && !integer) {
+            IrValue value = inst.srcs[0];
+            for (int depth = 0; depth < 16; ++depth) {
+                const auto key = ssa_key(value);
+                const auto found = key ? definitions.find(*key) : definitions.end();
+                if (found == definitions.end() || found->second->op != IrOp::Assign ||
+                    found->second->src_count != 1) break;
+                value = found->second->srcs[0];
+            }
+            if (value.kind == IrValueKind::Imm) return result;
+        }
         // x87 constants (fldz, fld1) reach the return as immediates.
         if (!floating && is_x86_32_abi(abi)) {
             IrValue value = inst.srcs[1];
-            while (const IrInst* copy = ssa_key(value) ? definitions[*ssa_key(value)] : nullptr) {
-                if (copy->op != IrOp::Assign || copy->src_count != 1) break;
-                value = copy->srcs[0];
+            for (int depth = 0; depth < 16; ++depth) {
+                const auto key = ssa_key(value);
+                const auto found = key ? definitions.find(*key) : definitions.end();
+                if (found == definitions.end() || found->second->op != IrOp::Assign ||
+                    found->second->src_count != 1) break;
+                value = found->second->srcs[0];
             }
             if (value.kind == IrValueKind::Imm && is_float_type(value.type)) {
                 if (type && *type != value.type) return result;

@@ -184,8 +184,32 @@ void lift_simd_binop(LiftCtx& ctx, std::string_view name, IrType t) {
         insn.mnemonic == Mnemonic::Pshuflw || insn.mnemonic == Mnemonic::Pshufhw;
     const bool nondestructive = !unary_shuffle && (insn.x86_vex || insn.x86_evex) &&
                                 insn.num_operands >= 3;
-    IrValue a = read_xmm(ctx, insn.operands[unary_shuffle || nondestructive ? 1 : 0], t);
-    IrValue b = unary_shuffle ? IrValue{} : read_xmm(ctx, insn.operands[nondestructive ? 2 : 1], t);
+    // Same-register idioms do not read the register: `pxor x, x` and
+    // `psub x, x` produce zero and `pcmpeq x, x` all ones. Lifting them as
+    // constants keeps a stale entry value out of the dataflow.
+    const Operand& left_op = insn.operands[unary_shuffle || nondestructive ? 1 : 0];
+    const Operand& right_op = insn.operands[nondestructive ? 2 : 1];
+    if (!unary_shuffle && t == IrType::I128 && !(insn.x86_evex && insn.x86_mask != 0) &&
+        left_op.kind == Operand::Kind::Register && right_op.kind == Operand::Kind::Register &&
+        left_op.reg == right_op.reg) {
+        const bool zero = name == "_mm_xor_si128" || name == "_mm_xor_ps" || name == "_mm_xor_pd" ||
+            name == "_mm_andnot_si128" || name == "_mm_andnot_ps" || name == "_mm_andnot_pd" ||
+            name.starts_with("_mm_sub_epi") || name.starts_with("_mm_cmpgt_epi");
+        const bool ones = name.starts_with("_mm_cmpeq_epi");
+        if (zero || ones) {
+            IrInst constant;
+            constant.op = IrOp::Intrinsic;
+            constant.name = zero ? "_mm_setzero_si128" : "_mm_set1_epi32";
+            constant.dst = ctx.temp(t);
+            if (ones) constant.srcs[constant.src_count++] = ctx.imm(-1, IrType::I32);
+            const IrValue result = constant.dst;
+            ctx.emit(std::move(constant));
+            write_xmm(ctx, insn.operands[0], result, t);
+            return;
+        }
+    }
+    IrValue a = read_xmm(ctx, left_op, t);
+    IrValue b = unary_shuffle ? IrValue{} : read_xmm(ctx, right_op, t);
     if (a.kind == IrValueKind::None || (!unary_shuffle && b.kind == IrValueKind::None)) return;
 
     IrInst i;

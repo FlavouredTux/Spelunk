@@ -112,10 +112,30 @@ std::string Emitter::expr_uncached(const IrValue& v, int depth, int min_prec) co
     return "";
 }
 
+std::optional<std::pair<std::string, std::string>>
+Emitter::unaligned_vector_access(const IrValue& addr, IrType type, Reg segment) const {
+    // `*(__m128i*)p` claims 16-byte alignment, so a C compiler may emit
+    // movdqa where the binary used movdqu. Vector memory goes through the
+    // unaligned intrinsics; stack slots are declared with their own type.
+    const unsigned bits = type_bits(type);
+    if (options.c_source || segment != Reg::None || (bits != 128 && bits != 256) ||
+        is_float_type(type) || stack_offset(addr) || try_resolve_imm_addr(addr)) {
+        return std::nullopt;
+    }
+    const std::string pointer = std::format("({}*)({})", bits == 128 ? "__m128i" : "__m256i",
+                                            expr(addr));
+    return std::pair{pointer, std::string(bits == 128 ? "_mm_storeu_si128" : "_mm256_storeu_si256")};
+}
+
     std::string Emitter::format_load_rhs(const IrInst& d,
                                      int depth,
                                      int min_prec) const {
     if (d.op != IrOp::Load || d.src_count < 1) return "";
+    if (auto unaligned = unaligned_vector_access(d.srcs[0], d.dst.type, d.segment)) {
+        return std::format("{}({})", type_bits(d.dst.type) == 128 ? "_mm_loadu_si128"
+                                                                  : "_mm256_loadu_si256",
+                           unaligned->first);
+    }
     if (binary && d.segment == Reg::None &&
         (d.dst.type == IrType::F32 || d.dst.type == IrType::F64)) {
         if (auto address = try_resolve_imm_addr(d.srcs[0])) {
@@ -135,7 +155,9 @@ std::string Emitter::expr_uncached(const IrValue& v, int depth, int min_prec) co
         }
     }
     const std::string refined = c_type_name_for(d.dst);
-    if (options.c_source && binary && d.segment == Reg::None &&
+    // A vector constant from read-only data renders as its value; its raw
+    // address means nothing outside the binary.
+    if (binary && d.segment == Reg::None &&
         (abi == Abi::SysVAmd64 || abi == Abi::Win64) &&
         d.dst.type == IrType::I128 && binary->endian() == Endian::Little) {
         if (auto address = try_resolve_imm_addr(d.srcs[0])) {
@@ -145,8 +167,13 @@ std::string Emitter::expr_uncached(const IrValue& v, int depth, int min_prec) co
                     va - section.vaddr > section.size || 16 > section.size - (va - section.vaddr)) continue;
                 const auto bytes = binary->bytes_at(va);
                 if (bytes.size() < 16) break;
-                return std::format("_mm_set_epi64x((int64_t)UINT64_C({:#x}), (int64_t)UINT64_C({:#x}))",
-                    read_le_at<u64>(bytes.data() + 8), read_le_at<u64>(bytes.data()));
+                const u64 high = read_le_at<u64>(bytes.data() + 8);
+                const u64 low = read_le_at<u64>(bytes.data());
+                if (options.c_source) {
+                    return std::format("_mm_set_epi64x((int64_t)UINT64_C({:#x}), (int64_t)UINT64_C({:#x}))",
+                                       high, low);
+                }
+                return std::format("_mm_set_epi64x({:#x}, {:#x})", high, low);
             }
         }
     }
@@ -626,6 +653,9 @@ std::string Emitter::format_store(const IrInst& inst) const {
             : std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val));
         return std::format("spelunk_write_{}({}, {});", c_memory_suffix(val.type), c_address(addr), value);
     }
+    if (auto unaligned = unaligned_vector_access(addr, val.type, inst.segment)) {
+        return std::format("{}({}, {});", unaligned->second, unaligned->first, expr(val));
+    }
     std::string lhs;
     if (inst.segment == Reg::None) {
         if (auto off = stack_offset(addr); off) {
@@ -692,7 +722,8 @@ std::string Emitter::format_store(const IrInst& inst) const {
         return compound;
     }
     const std::string rhs = options.c_source && !is_float_type(val.type) && type_bits(val.type) <= 64
-        ? std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val)) : expr(val);
+        ? std::format("({})(uintptr_t)({})", c_type_name(val.type), expr(val))
+        : adapt_vector_lane(val, expr(val));
     // A register reloaded from its stack home and spilled straight back.
     if (lhs == rhs && inst.segment == Reg::None && stack_offset(addr)) return "";
     return std::format("{} = {};", lhs, rhs);
@@ -815,7 +846,7 @@ std::string Emitter::format_stmt(const IrInst& inst) const {
                 // already chase the destination to a source expression, an
                 // explicit `f31 = value;`/`r30 = ptr;` line is dead
                 // architectural noise even when the alias has several uses.
-                if ((is_ppc_abi() || options.c_source) &&
+                if ((is_ppc_abi() || options.c_source || is_x86_vector(inst.dst.reg)) &&
                     !renders_raw_arch_reg_name(inst.dst)) return "";
                 // With rvalue forwarding in render_reg_leaf, a single reader
                 // inlines the source expression directly. The `reg = expr;`

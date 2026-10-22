@@ -953,10 +953,17 @@ void Emitter::emit_region_return(const Region& r, int depth, std::string& out) c
     if (auto payload = low_byte_return_payload(v); payload) {
         v = *payload;
     }
+    // The implicit conversion extends by the narrower value's C signedness,
+    // so it may stand in only for the matching extension.
     if (const IrInst* d = def_of(v); d && d->src_count >= 1
             && (d->op == IrOp::ZExt || d->op == IrOp::SExt)
             && type_bits(d->srcs[0].type) <= type_bits(d->dst.type)) {
-        v = d->srcs[0];
+        const std::string narrow = c_type_name_for(d->srcs[0]);
+        const bool is_signed = narrow.starts_with("int") || narrow == "char" ||
+                               narrow == "short" || narrow == "long";
+        const bool is_unsigned = narrow.starts_with("uint") || narrow == "bool" ||
+                                 narrow.starts_with("unsigned") || narrow.ends_with('*');
+        if (d->op == IrOp::ZExt ? is_unsigned : is_signed) v = d->srcs[0];
     }
     std::string rendered = expr(v);
     emit_materializations_for_rendered_value(v, rendered, out, ind);

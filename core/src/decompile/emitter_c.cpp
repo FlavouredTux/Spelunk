@@ -562,6 +562,46 @@ std::string Emitter::c_intrinsic_name(const IrInst& inst) {
     return out;
 }
 
+std::string Emitter::adapt_vector_lane(const IrValue& use, std::string rendered) const {
+    // A register read at a width other than the one its last definition
+    // wrote: scalar loads (movss/movsd/movd/movq) zero the upper lanes, and
+    // scalar reads take lane 0.
+    const IrInst* definition = def_of(use);
+    if (!definition || definition->op == IrOp::Clobber || definition->op == IrOp::Phi ||
+        definition->op == IrOp::Call || definition->op == IrOp::CallIndirect) return rendered;
+    const IrType written = definition->dst.type;
+    if (written == use.type) return rendered;
+    // Only a real vector producer has lanes to pick from; call results and
+    // scalar-lane merges already render as the scalar.
+    const IrInst* producer = definition;
+    for (int depth = 0; depth < 8 && producer->op == IrOp::Assign && producer->src_count == 1; ++depth) {
+        const IrInst* next = def_of(producer->srcs[0]);
+        if (!next) break;
+        producer = next;
+    }
+    const bool vector_producer = producer->op == IrOp::Load ||
+        (producer->op == IrOp::Intrinsic && producer->name.starts_with("_mm"));
+    if (type_bits(use.type) == 128 && type_bits(written) < 128) {
+        switch (written) {
+            case IrType::F32: return std::format("_mm_castps_si128(_mm_set_ss({}))", rendered);
+            case IrType::F64: return std::format("_mm_castpd_si128(_mm_set_sd({}))", rendered);
+            case IrType::I64: return std::format("_mm_cvtsi64_si128({})", rendered);
+            case IrType::I32: return std::format("_mm_cvtsi32_si128({})", rendered);
+            default: return rendered;
+        }
+    }
+    if (type_bits(written) == 128 && type_bits(use.type) < 128 && vector_producer) {
+        switch (use.type) {
+            case IrType::F32: return std::format("_mm_cvtss_f32(_mm_castsi128_ps({}))", rendered);
+            case IrType::F64: return std::format("_mm_cvtsd_f64(_mm_castsi128_pd({}))", rendered);
+            case IrType::I64: return std::format("_mm_cvtsi128_si64({})", rendered);
+            case IrType::I32: return std::format("_mm_cvtsi128_si32({})", rendered);
+            default: return rendered;
+        }
+    }
+    return rendered;
+}
+
 std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const {
     if (options.c_source && inst.src_count == 2 &&
         (inst.name == "xmm.insert_f32" || inst.name == "xmm.insert_f64")) {
@@ -578,10 +618,15 @@ std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const 
                                 inst.name.ends_with("_ss") && inst.src_count == 2;
     const bool packed_logic = inst.name == "_mm_and_ps" || inst.name == "_mm_andnot_ps" ||
                               inst.name == "_mm_or_ps" || inst.name == "_mm_xor_ps";
-    if (options.c_source && inst.src_count == 2 &&
-        (inst.name == "_mm_xor_si128" || inst.name == "_mm_xor_ps" || inst.name == "_mm_xor_pd") &&
-        same_ssa_value(inst.srcs[0], inst.srcs[1])) {
-        return "_mm_setzero_si128()";
+    // Same-register idioms ignore the register's old contents: `pxor x, x`
+    // and `psub x, x` zero it, `pcmpeq x, x` sets every bit.
+    if (inst.src_count == 2 && same_ssa_value(inst.srcs[0], inst.srcs[1])) {
+        if (inst.name == "_mm_xor_si128" || inst.name == "_mm_xor_ps" ||
+            inst.name == "_mm_xor_pd" || inst.name == "_mm_andnot_si128" ||
+            inst.name.starts_with("_mm_sub_epi")) {
+            return "_mm_setzero_si128()";
+        }
+        if (inst.name.starts_with("_mm_cmpeq_epi")) return "_mm_set1_epi32(-1)";
     }
     // REP string operands are RDI / RSI / RAX / RCX: two addresses, or an
     // address and a fill value, plus a count. The helpers take them as
@@ -593,6 +638,9 @@ std::string Emitter::render_intrinsic_call(const IrInst& inst, int depth) const 
     for (u8 i = 0; i < inst.src_count && i < inst.srcs.size(); ++i) {
         if (i > 0) args += ", ";
         std::string rendered = expr(inst.srcs[i], depth, 0);
+        if (!options.c_source && inst.name.starts_with("_mm_")) {
+            rendered = adapt_vector_lane(inst.srcs[i], std::move(rendered));
+        }
         if (options.c_source && (scalar_compare || packed_logic)) {
             rendered = scalar_compare && i == 1
                 ? std::format("_mm_set_ss({})", rendered)

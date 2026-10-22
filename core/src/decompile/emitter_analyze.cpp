@@ -1251,17 +1251,19 @@ void Emitter::cover_phi_edges() {
             if (named == merge_value_names.end()) continue;
             const auto local = merge_locals.find(named->second);
             if (local == merge_locals.end()) continue;
-            // Returns render the incoming value per return site; a Phi read
-            // only through other Phis matters when the web is read at all.
+            // Returns render the incoming value per return site unless the
+            // return prints the Phi itself; a Phi read only through other
+            // Phis matters when the web is read at all.
             const auto read_outside_returns = [&](const SsaKey& key) {
                 return std::ranges::any_of(ssa_uses.visible_user_positions(key),
                     [&](const auto& position) {
                         return fn->blocks[position.first].insts[position.second].op != IrOp::Return;
                     });
             };
-            if (!ssa_uses.visible_user_positions(*phi_key).empty()
+            if (!structured_return_values.contains(*phi_key) &&
+                (!ssa_uses.visible_user_positions(*phi_key).empty()
                     ? !read_outside_returns(*phi_key)
-                    : std::ranges::none_of(local->second.keys, read_outside_returns)) continue;
+                    : std::ranges::none_of(local->second.keys, read_outside_returns))) continue;
             const std::string& name = named->second;
             for (std::size_t i = 0; i < phi.phi_operands.size(); ++i) {
                 const IrValue& operand = phi.phi_operands[i];

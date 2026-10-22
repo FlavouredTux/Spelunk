@@ -8,11 +8,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <format>
+#include <map>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 #include <spelunk/analysis/discovery.hpp>
@@ -84,12 +87,24 @@ void note_mid_function(addr_t addr, std::string_view name, u64 off) {
 
 [[nodiscard]] std::optional<FuncWindow>
 exact_discovered_function(const Binary& b, addr_t addr, EnumerateMode mode) {
-    for (const auto& fn : enumerate_functions(b, mode)) {
-        if (fn.addr != addr) continue;
-        if (b.bytes_at(addr).empty()) return std::nullopt;
-        return window_from_addr(fn.addr, fn.size, fn.name);
+    // Batch runs resolve every symbol through here; enumerating sweeps the
+    // whole image, so do it once per image and mode.
+    struct Memo final : Binary::AnalysisMemo {
+        std::mutex mutex;
+        std::map<EnumerateMode, std::unordered_map<addr_t, DiscoveredFunction>> by_mode;
+    };
+    auto& memo = b.analysis_memo<Memo>();
+    const std::lock_guard lock(memo.mutex);
+    auto [functions, fresh] = memo.by_mode.try_emplace(mode);
+    if (fresh) {
+        for (auto& fn : enumerate_functions(b, mode)) {
+            const addr_t start = fn.addr;
+            functions->second.try_emplace(start, std::move(fn));
+        }
     }
-    return std::nullopt;
+    const auto found = functions->second.find(addr);
+    if (found == functions->second.end() || b.bytes_at(addr).empty()) return std::nullopt;
+    return window_from_addr(found->second.addr, found->second.size, found->second.name);
 }
 
 [[nodiscard]] u64 metadata_extent_at(const Binary& b, addr_t addr) {

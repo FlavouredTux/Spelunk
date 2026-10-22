@@ -16,11 +16,12 @@ debug information.
 | Architecture | Status | ABIs |
 |---|---|---|
 | x86-64 | Main target | SysV, Win64 |
+| x86 (IA-32) | Partial | Win32 cdecl, stdcall, fastcall, thiscall |
 | AArch64 / ARM32 | Partial | AAPCS64, AAPCS32 |
 | PPC32 / PPC64 | Partial | SysV, ELFv1, ELFv2 |
 
-Supported inputs include ELF, Mach-O, PE, PDB, minidumps, raw memory regions,
-PPC object files, DOL, Wii REL, and DTK projects.
+Supported inputs include ELF, Mach-O, PE (PE32 and PE32+), PDB, minidumps, raw
+memory regions, PPC object files, DOL, Wii REL, and DTK projects.
 
 Incomplete analysis remains visible in the output. Pseudo-C is intended for
 reverse engineering; it is not a reconstruction of the original source.
@@ -111,7 +112,7 @@ Run `spelunk --help <topic>` for detailed options. Available topics include
 
 ## Documentation
 
-- [x86-64](docs/x86.md)
+- [x86 and x86-64](docs/x86.md)
 - [PowerPC and Wii](docs/powerpc.md)
 - [Annotations](docs/annotations.md)
 - [Raw memory input](docs/raw-input.md)

@@ -3,7 +3,6 @@
 
 #include <spelunk/common/annotations.hpp>
 
-#include <charconv>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
@@ -110,17 +109,14 @@ int run_annotate(const Args& args, const Binary& /*b*/) {
 
     AnnotationMeta meta;
     if (!args.annotate_conf.empty()) {
-        // Reuse charconv on a local view; clamp to [0,1] to match the
-        // annotations parser's clamp on load.
-        float v = 0.0f;
-        const auto* first = args.annotate_conf.data();
-        const auto* last  = first + args.annotate_conf.size();
-        auto rc = std::from_chars(first, last, v);
-        if (rc.ec != std::errc{} || rc.ptr != last) {
+        // Clamp to [0,1] to match the annotations parser's clamp on load.
+        const auto parsed = parse_cli_double(args.annotate_conf);
+        if (!parsed) {
             spelunk::diagnostic::print("spelunk: --confidence: expected a float in [0,1], got '{}'",
                 args.annotate_conf);
             return EXIT_FAILURE;
         }
+        float v = static_cast<float>(*parsed);
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
         meta.confidence = v;

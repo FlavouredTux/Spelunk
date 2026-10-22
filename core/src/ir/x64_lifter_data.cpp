@@ -1,5 +1,6 @@
 // Data movement: cmov, xchg/xadd/cmpxchg, bit scan/test, bswap, push/pop.
 
+#include <format>
 #include <string>
 #include <string_view>
 #include <utility>

@@ -1,7 +1,10 @@
 #include "util.hpp"
 
 #include <charconv>
+#include <cctype>
+#include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 #include <optional>
 #include <string>
@@ -29,12 +32,18 @@ std::optional<addr_t> parse_cli_addr(std::string_view s) {
 }
 
 std::optional<double> parse_cli_double(std::string_view s) {
-    if (s.empty()) return std::nullopt;
-    double value = 0.0;
-    const auto r = std::from_chars(s.data(), s.data() + s.size(), value,
-                                   std::chars_format::general);
-    if (r.ec != std::errc{} || r.ptr != s.data() + s.size() ||
-        !std::isfinite(value)) {
+    // Not std::from_chars: Apple's libc++ gates its floating-point overload
+    // behind macOS 26. strtod reads the "C" locale here (nothing calls
+    // setlocale); the checks keep from_chars' strict, decimal-only syntax.
+    if (s.empty() || s.front() == '+' || std::isspace(static_cast<unsigned char>(s.front())) ||
+        s.find_first_of("xX") != std::string_view::npos) {
+        return std::nullopt;
+    }
+    const std::string text(s);
+    char* end = nullptr;
+    errno = 0;
+    const double value = std::strtod(text.c_str(), &end);
+    if (errno == ERANGE || end != text.c_str() + text.size() || !std::isfinite(value)) {
         return std::nullopt;
     }
     return value;

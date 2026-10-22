@@ -1,0 +1,134 @@
+name: release-macos
+
+# Builds the CLI on Apple Silicon and attaches it to a GitHub release.
+# Apple clang's libc++ has no <print>, so the build uses Homebrew's LLVM.
+# Its libc++, libc++abi and libunwind ship next to the binary in lib/
+# (found through @executable_path), so a Mac without Homebrew runs it.
+#
+#   - release published: build that tag and upload the archive
+#   - manual run with a tag: same, for an existing release
+#   - manual run without a tag: build and check only
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to upload to (empty = build only)
+        required: false
+      ref:
+        description: Source to build when it differs from the tag (e.g. a later fix)
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.event.release.tag_name || inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Toolchain
+        run: brew install llvm ninja
+
+      - name: Configure
+        run: |
+          llvm="$(brew --prefix llvm)"
+          # zlib lives in the SDK's usr/include; handing that directory to the
+          # compiler would put the C headers ahead of libc++'s own wrappers.
+          sdk="$(xcrun --show-sdk-path)"
+          zlib="$RUNNER_TEMP/zlib-include"
+          mkdir -p "$zlib"
+          ln -sf "$sdk/usr/include/zlib.h" "$sdk/usr/include/zconf.h" "$zlib/"
+          # Homebrew's libc++ is built for macOS 15; match it.
+          cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DSPELUNK_WERROR=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_C_COMPILER="$llvm/bin/clang" -DCMAKE_CXX_COMPILER="$llvm/bin/clang++" \
+            -DZLIB_INCLUDE_DIR="$zlib" \
+            -DCMAKE_EXE_LINKER_FLAGS="-L$llvm/lib/c++ -L$llvm/lib/unwind -lunwind"
+
+      - name: Build
+        run: cmake --build build-release --target spelunk_cli -- -k 0
+
+      - name: Package
+        run: |
+          llvm="$(brew --prefix llvm)"
+          version=$(build-release/cli/spelunk --version | awk '{print $2}')
+          stage="spelunk-${version}-macos-arm64"
+          mkdir -p "$stage/lib"
+          cp build-release/cli/spelunk "$stage/"
+          strip "$stage/spelunk"
+          for lib in "$llvm/lib/c++/libc++.1.dylib" "$llvm/lib/c++/libc++abi.1.dylib" \
+                     "$llvm/lib/unwind/libunwind.1.dylib"; do
+            cp -L "$lib" "$stage/lib/"
+          done
+          chmod u+w "$stage/lib/"*.dylib
+          # Point every reference into Homebrew at the bundled copies.
+          relink() {
+            local file="$1" anchor="$2"
+            otool -L "$file" | tail -n +2 | awk '{print $1}' | while read -r dep; do
+              case "$dep" in
+                "$llvm"/*|/opt/homebrew/*|@rpath/*)
+                  install_name_tool -change "$dep" "$anchor/$(basename "$dep")" "$file" ;;
+              esac
+            done
+          }
+          relink "$stage/spelunk" "@executable_path/lib"
+          for lib in "$stage/lib/"*.dylib; do
+            install_name_tool -id "@loader_path/$(basename "$lib")" "$lib"
+            relink "$lib" "@loader_path"
+          done
+          codesign --force -s - "$stage/lib/"*.dylib "$stage/spelunk"
+          tar czf "$stage.tar.gz" "$stage"
+          echo "STAGE=$stage" >> "$GITHUB_ENV"
+          echo "ARCHIVE=$stage.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Check
+        run: |
+          # Run the packaged copy from elsewhere, with Homebrew's LLVM gone
+          # from the search paths, the way a user would.
+          check="$RUNNER_TEMP/check"
+          mkdir -p "$check"
+          tar xzf "$ARCHIVE" -C "$check"
+          cli="$check/$STAGE/spelunk"
+          for file in "$cli" "$check/$STAGE/lib/"*.dylib; do
+            otool -L "$file"
+            if otool -L "$file" | tail -n +2 | grep -v -e '^\s*/usr/lib/' -e '^\s*/System/' -e '@executable_path/lib/' -e '@loader_path/'; then
+              echo "$file links a library outside the system and the bundle" >&2
+              exit 1
+            fi
+          done
+          "$cli" --version
+          "$cli" --no-cache -p -s main tests/fixtures/pointer_walk.prebuilt
+          "$cli" --no-cache -p -s sum_and_report tests/fixtures/pointer_walk.prebuilt
+          # A batch renders on worker threads.
+          printf 'main\nsum_and_report\n' > "$check/symbols"
+          "$cli" --no-cache -p --symbols "$check/symbols" tests/fixtures/pointer_walk.prebuilt > /dev/null
+
+      - name: Crash reports
+        if: failure()
+        run: |
+          for report in ~/Library/Logs/DiagnosticReports/*.ips; do
+            [ -f "$report" ] || continue
+            echo "== $report"
+            head -c 20000 "$report"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spelunk-macos-arm64
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+      - name: Upload to release
+        if: env.TAG != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" "$ARCHIVE" --clobber --repo "$GITHUB_REPOSITORY"

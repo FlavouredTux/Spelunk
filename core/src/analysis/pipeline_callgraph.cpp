@@ -588,7 +588,10 @@ compute_callee_report(const Binary& b, addr_t fn,
             }
 
             if (is_unconditional_jmp(mn)) {
-                if (auto t = branch_target(insn); t && callee_is_function_entry(b, *t)) {
+                // The builder already ends a block in TailCall when the jmp
+                // reaches another known entry, discovered `sub_` ones included.
+                if (auto t = branch_target(insn);
+                    t && (bb.kind == BlockKind::TailCall || callee_is_function_entry(b, *t))) {
                     out.push_back({*t, CalleeKind::Tail, insn.address});
                     continue;
                 }

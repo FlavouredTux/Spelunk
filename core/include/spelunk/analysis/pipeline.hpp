@@ -145,8 +145,8 @@ enumerate_functions(const Binary& b, EnumerateMode m = EnumerateMode::Auto,
 // Per-call edge classification used by `spelunk --callees`. `Direct` covers
 // reachable `call <imm>`; `DirectExtent` covers a direct call found only by
 // the complete extent scan (normally a landing pad); `Tail` covers an
-// unconditional `jmp` whose target is a
-// known function entry (defined symbol or PLT stub); `IndirectConst`
+// unconditional `jmp` whose target is a known function entry (defined
+// symbol, PLT stub or discovered function); `IndirectConst`
 // covers `call qword ptr [rip + disp]` where the dereferenced 8 bytes
 // resolve to a code address (vtable/IAT/RTTI thunk patterns).
 // Genuinely opaque indirect calls have no concrete edge and are returned as

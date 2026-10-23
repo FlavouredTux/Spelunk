@@ -37,6 +37,10 @@ with tempfile.TemporaryDirectory(prefix='spelunk-cli-analysis-') as directory:
     assert len(report['unresolved_indirect_sites']) == 1, report
     plain = invoke(['--callees', 'callees_complete', binary]).stdout
     assert plain.startswith('# spelunk-build: ') and 'direct_extent' in plain and 'indirect_unresolved' in plain, plain
+    tail = json.loads(invoke(['--callees', 'tail_unnamed', '--json', binary]).stdout)
+    start, size = by_name['tail_unnamed']
+    assert tail['extent_complete'] is True, tail
+    assert [(int(row['va'], 16), row['kind']) for row in tail['callees']] == [(start + size, 'tail')], tail
 
     start = by_name['scoped_function'][0]
     # push rbp is one byte; start+1 is a valid boundary. start+2 lands in

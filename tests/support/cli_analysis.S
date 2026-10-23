@@ -20,6 +20,19 @@ callees_complete:
     ret
 .size callees_complete,.-callees_complete
 
+.globl tail_unnamed
+.type tail_unnamed,@function
+tail_unnamed:
+    jmp .Lunnamed_body
+.size tail_unnamed,.-tail_unnamed
+
+// No symbol, only an FDE: a stripped image's discovered function.
+.Lunnamed_body:
+    .cfi_startproc
+    call reachable_call
+    ret
+    .cfi_endproc
+
 .globl reachable_call
 .type reachable_call,@function
 reachable_call:

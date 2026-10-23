@@ -38,7 +38,7 @@ struct SurfaceOutputFilter {
 // output helper (run_cached) can pass them as the compute step without
 // mixing dispatch with formatting.
 
-[[nodiscard]] std::string build_strings_output     (const Binary& b);
+[[nodiscard]] std::string build_strings_output     (const Binary& b, bool json);
 [[nodiscard]] std::string build_graphics_output    (const Binary& b, bool json,
                                                     const GraphicsOutputFilter& filter = {});
 [[nodiscard]] std::string build_surfaces_output    (const Binary& b, bool json,

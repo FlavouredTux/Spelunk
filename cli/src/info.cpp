@@ -150,7 +150,7 @@ void help_syms() {
     std::println("      --collisions     every name / fingerprint bound to >1 address (TSV/JSON)");
     std::println("      --validate NAME  every addr bound to NAME + byte-similar lookalikes");
     std::println("      --containing-fn FN|VA  entry/size/name/offset of the function covering VA");
-    std::println("      --strings        printable strings (addr | text | xrefs)");
+    std::println("      --strings        printable strings (addr | text | xrefs); --json supported");
     std::println("      --surfaces       app/subsystem inventory (ScriptVM, network, media,");
     std::println("                       web auth, storage, analytics, crash/update, etc.);");
     std::println("                       Mach-O .app inputs also classify shipped bundle files");

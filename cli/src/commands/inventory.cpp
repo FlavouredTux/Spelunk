@@ -161,8 +161,10 @@ int run_data_xrefs(const Args& args, const Binary& b) {
 int run_strings(const Args& args, const Binary& b) {
     // Cache tag bumped to v2 when the scanner started covering executable
     // sections (Mach-O __cstring lives in __TEXT). Old "strings" cache
-    // entries from before that change are now orphaned.
-    return run_cached(args, "strings-v2", [&] { return build_strings_output(b); });
+    // entries from before that change are now orphaned. JSON caches apart,
+    // as with --data-xrefs.
+    const std::string_view tag = args.json ? "strings-json-v1" : "strings-v2";
+    return run_cached(args, tag, [&] { return build_strings_output(b, args.json); });
 }
 
 bool surfaces_artifacts_only_requested(const Args& args) {

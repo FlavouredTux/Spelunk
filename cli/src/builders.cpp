@@ -60,7 +60,22 @@ namespace spelunk::cli {
 
 using namespace builders;
 
-std::string build_strings_output(const Binary& b) {
+std::string build_strings_output(const Binary& b, bool json) {
+    if (json) {
+        // [{"addr":"0x...","text":"...","xrefs":["0x...",...]},...]
+        std::string out = "[";
+        bool first = true;
+        for (const auto& e : scan_strings(b)) {
+            if (!first) out += ',';
+            first = false;
+            out += std::format("{{\"addr\":\"{:#x}\",\"text\":\"{}\",\"xrefs\":[", e.addr, json_escape(e.text));
+            for (std::size_t i = 0; i < e.xrefs.size(); ++i)
+                out += std::format("{}\"{:#x}\"", i > 0 ? "," : "", e.xrefs[i]);
+            out += "]}";
+        }
+        out += "]\n";
+        return out;
+    }
     // Format: "addr|escaped-text|xref1,xref2,..."  (addrs in hex, no 0x prefix)
     std::string out;
     for (const auto& e : scan_strings(b)) {

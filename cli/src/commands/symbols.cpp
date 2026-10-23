@@ -92,9 +92,6 @@ format_ref_rows_tsv(std::span<const RefRow> rows,
                     detail += std::format("  ; slot-section {}", sec);
                 }
             }
-            if (r.kind == "direct") {
-                detail += "  ; site not cached (showing caller entry)";
-            }
             if (const auto insn = first_disasm_line_at(*b, r.from_pc);
                 !insn.empty()) {
                 detail += std::format("  ; site {}", insn);
@@ -172,9 +169,9 @@ gather_refs_to_rows(const Args& args, const Binary& b, addr_t va) {
     ScopedTimer total_timer("refs_to.gather");
     std::vector<RefRow> out;
     if (refs_access_needs_call_edges(args)) {
-        for (addr_t from : compute_callers_to_fast(b, va)) {
+        for (const CallSite& call : compute_call_sites_to_fast(b, va)) {
             RefRow row;
-            row.from_pc = from;
+            row.from_pc = call.site;
             row.target  = va;
             row.kind    = "direct";
             if (auto cf = containing_function(b, row.from_pc); cf) {

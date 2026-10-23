@@ -73,6 +73,16 @@ struct ModuleScope {
 [[nodiscard]] ModuleScope resolve_module_scope(const Binary& b,
                                                std::string_view name);
 
+// Every call (or tail jump to a known entry) that reaches `want`, with the
+// function holding it, from one linear scan of each function's bytes.
+struct CallSite {
+    addr_t function = 0;
+    addr_t site     = 0;
+};
+[[nodiscard]] std::vector<CallSite>
+compute_call_sites_to_fast(const Binary& b, addr_t want);
+
+// The functions holding those sites, sorted and unique.
 [[nodiscard]] std::vector<addr_t>
 compute_callers_to_fast(const Binary& b, addr_t want);
 

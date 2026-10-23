@@ -145,6 +145,15 @@ ModuleScope resolve_module_scope(const Binary& b,
 
 std::vector<addr_t>
 compute_callers_to_fast(const Binary& b, addr_t want) {
+    std::vector<addr_t> out;
+    for (const CallSite& s : compute_call_sites_to_fast(b, want)) out.push_back(s.function);
+    std::ranges::sort(out);
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
+}
+
+std::vector<CallSite>
+compute_call_sites_to_fast(const Binary& b, addr_t want) {
     ScopedTimer total_timer("callers_to_fast.total");
     auto dec_r = make_decoder(b);
     if (!dec_r) return {};
@@ -174,7 +183,7 @@ compute_callers_to_fast(const Binary& b, addr_t want) {
     known_entries.reserve(work.size());
     for (const auto& w : work) known_entries.insert(w.addr);
 
-    std::vector<addr_t> out;
+    std::vector<CallSite> out;
     for (const auto& w : work) {
         auto span = b.bytes_at(w.addr);
         if (span.empty()) continue;
@@ -182,8 +191,7 @@ compute_callers_to_fast(const Binary& b, addr_t want) {
             span.size(), static_cast<std::size_t>(w.size));
         addr_t ip = w.addr;
         std::size_t off = 0;
-        bool emitted = false;
-        while (off < limit && !emitted) {
+        while (off < limit) {
             if (b.is_data_in_code(ip)) {
                 ++ip;
                 ++off;
@@ -198,23 +206,22 @@ compute_callers_to_fast(const Binary& b, addr_t want) {
             }
             const Instruction& insn = *decoded;
             if (is_call(insn.mnemonic)) {
-                if (auto target = branch_target(insn); target && *target == want) {
-                    out.push_back(w.addr);
-                    emitted = true;
-                }
+                if (auto target = branch_target(insn); target && *target == want)
+                    out.push_back({w.addr, ip});
             } else if (is_unconditional_jmp(insn.mnemonic)) {
                 if (auto target = branch_target(insn); target && *target == want &&
-                    (known_entries.contains(*target) || b.import_at_plt(*target) != nullptr)) {
-                    out.push_back(w.addr);
-                    emitted = true;
-                }
+                    (known_entries.contains(*target) || b.import_at_plt(*target) != nullptr))
+                    out.push_back({w.addr, ip});
             }
             ip  += insn.length;
             off += insn.length;
         }
     }
-    std::ranges::sort(out);
-    out.erase(std::unique(out.begin(), out.end()), out.end());
+    // Overlapping symbol and discovered extents can scan one site twice.
+    std::ranges::sort(out, {}, [](const CallSite& s) { return std::pair{s.site, s.function}; });
+    out.erase(std::unique(out.begin(), out.end(), [](const CallSite& a, const CallSite& b2) {
+                  return a.site == b2.site;
+              }), out.end());
     return out;
 }
 
